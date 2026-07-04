@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -35,9 +35,9 @@ import {
   Eye,
   Calendar,
   Heart,
-  Gauge,
   Film,
   CheckCircle,
+  RotateCcw,
 } from 'lucide-react-native';
 import Animated, {
   FadeIn,
@@ -54,6 +54,7 @@ const APP_NAME = 'StreamFlix';
 const CONTROLS_HIDE_DELAY = 4000;
 const DOUBLE_TAP_DELAY = 300;
 const AUTOPLAY_KEY = 'streamflix_autoplay_next';
+const STATUS_THROTTLE_MS = 250;
 
 const getStoredAutoplay = (): boolean => {
   if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
@@ -94,16 +95,39 @@ export default function VideoPlayerScreen() {
   const [seeking, setSeeking] = useState(false);
   const [seekPosition, setSeekPosition] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [screenWidth, setScreenWidth] = useState(initialWidth);
   const [screenHeight, setScreenHeight] = useState(initialHeight);
   const [videoAspect, setVideoAspect] = useState<number | null>(null);
 
+  // Refs for high-frequency values to avoid re-renders
   const hideControlsTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedSecond = useRef(0);
   const lastTapTime = useRef(0);
-  const seekBarRef = useRef<View>(null);
   const seekBarWidth = useRef(0);
   const isSeeking = useRef(false);
+  const lastStatusUpdate = useRef(0);
+  const positionRef = useRef(0);
+  const durationRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const autoPlayNextRef = useRef(false);
+  const relatedVideosRef = useRef<VideoType[]>([]);
+  const userRef = useRef(user);
+  const idRef = useRef(id);
+  const videoDataRef = useRef<VideoType | null>(null);
+  const fullscreenRef = useRef(false);
+  const containerRef = useRef<View>(null);
+
+  // Keep refs in sync
+  useEffect(() => { positionRef.current = position; }, [position]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { autoPlayNextRef.current = autoPlayNext; }, [autoPlayNext]);
+  useEffect(() => { relatedVideosRef.current = relatedVideos; }, [relatedVideos]);
+  useEffect(() => { userRef.current = user; }, [user]);
+  useEffect(() => { idRef.current = id; }, [id]);
+  useEffect(() => { videoDataRef.current = videoData; }, [videoData]);
+  useEffect(() => { fullscreenRef.current = isFullscreen; }, [isFullscreen]);
 
   // Load autoplay preference from storage
   useEffect(() => {
@@ -119,11 +143,35 @@ export default function VideoPlayerScreen() {
     return () => subscription?.remove();
   }, []);
 
+  const saveProgress = useCallback(async (currentPosition: number) => {
+    const currentUser = userRef.current;
+    const currentId = idRef.current;
+    const currentVideo = videoDataRef.current;
+    if (!currentUser || !currentId || !currentVideo) return;
+    try {
+      await supabase.from('watch_history').upsert(
+        {
+          user_id: currentUser.id,
+          video_id: currentId,
+          progress: Math.floor(currentPosition),
+          completed: currentVideo.duration ? currentPosition >= currentVideo.duration - 10 : false,
+          last_watched_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,video_id' }
+      );
+    } catch (err) {
+      // Silent - progress saving shouldn't interrupt playback
+    }
+  }, []);
+
   const fetchVideo = useCallback(async () => {
     if (!id) return;
 
     setLoading(true);
     setError(null);
+    setPlaybackError(null);
+    setHasInitialized(false);
+    lastSavedSecond.current = 0;
 
     try {
       const { data: vData, error: fetchError } = await supabase
@@ -236,6 +284,9 @@ export default function VideoPlayerScreen() {
     fetchVideo();
     return () => {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+      if (Platform.OS === 'web' && typeof document !== 'undefined' && document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
     };
   }, [id, fetchVideo]);
 
@@ -248,74 +299,91 @@ export default function VideoPlayerScreen() {
     }
   }, [videoUri, initialPosition, hasInitialized, toast]);
 
-  const saveProgress = useCallback(async (currentPosition: number) => {
-    if (!user || !id || !videoData) return;
-    try {
-      await supabase.from('watch_history').upsert(
-        {
-          user_id: user.id,
-          video_id: id,
-          progress: Math.floor(currentPosition),
-          completed: videoData.duration ? currentPosition >= videoData.duration - 10 : false,
-          last_watched_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id,video_id' }
-      );
-    } catch (err) {
-      // Silent - progress saving shouldn't interrupt playback
-    }
-  }, [user, id, videoData]);
-
-  const handlePlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-    if (status.isLoaded) {
-      setPosition(status.positionMillis / 1000);
-      setDuration(status.durationMillis ? status.durationMillis / 1000 : 0);
-      setIsPlaying(status.isPlaying);
-      setBuffering(status.isBuffering);
-
-      // Detect video aspect ratio from natural size
-      const statusAny = status as any;
-      if (statusAny.naturalSize && statusAny.naturalSize.width && statusAny.naturalSize.height) {
-        const aspect = statusAny.naturalSize.width / statusAny.naturalSize.height;
-        setVideoAspect(prev => prev !== aspect ? aspect : prev);
+  // Throttled playback status handler - prevents excessive re-renders
+  const handlePlaybackStatusUpdate = useCallback((status: AVPlaybackStatus) => {
+    if (!status.isLoaded) {
+      if ((status as any).error) {
+        setPlaybackError((status as any).error);
       }
+      return;
+    }
 
-      if (status.didJustFinish && autoPlayNext && relatedVideos.length > 0) {
-        const nextVideo = relatedVideos[0];
+    const now = Date.now();
+    const shouldUpdateState = now - lastStatusUpdate.current >= STATUS_THROTTLE_MS;
+
+    const newPos = status.positionMillis / 1000;
+    const newDur = status.durationMillis ? status.durationMillis / 1000 : 0;
+    const newPlaying = status.isPlaying;
+    const newBuffering = status.isBuffering;
+
+    // Detect video aspect ratio from natural size (only once)
+    const statusAny = status as any;
+    if (statusAny.naturalSize && statusAny.naturalSize.width && statusAny.naturalSize.height) {
+      const aspect = statusAny.naturalSize.width / statusAny.naturalSize.height;
+      setVideoAspect(prev => prev !== aspect ? aspect : prev);
+    }
+
+    // Handle playback finish
+    if (status.didJustFinish) {
+      setIsPlaying(false);
+      if (autoPlayNextRef.current && relatedVideosRef.current.length > 0) {
+        const nextVideo = relatedVideosRef.current[0];
         toast.info('Playing next video', nextVideo.title);
-        // Use push instead of replace to avoid full page reload behavior
         router.push(`/player/${nextVideo.id}`);
         return;
       }
-
-      const currentSecond = Math.floor(status.positionMillis / 1000);
-      if (currentSecond > 0 && currentSecond % 5 === 0 && currentSecond !== lastSavedSecond.current) {
-        lastSavedSecond.current = currentSecond;
-        saveProgress(status.positionMillis / 1000);
-      }
     }
-  };
 
-  const togglePlayPause = async () => {
+    // Save progress every 5 seconds
+    const currentSecond = Math.floor(newPos);
+    if (currentSecond > 0 && currentSecond % 5 === 0 && currentSecond !== lastSavedSecond.current) {
+      lastSavedSecond.current = currentSecond;
+      saveProgress(newPos);
+    }
+
+    // Throttle state updates to prevent excessive re-renders
+    if (shouldUpdateState || newPlaying !== isPlayingRef.current || newBuffering) {
+      lastStatusUpdate.current = now;
+      setPosition(newPos);
+      if (newDur > 0) setDuration(newDur);
+      setIsPlaying(newPlaying);
+      setBuffering(newBuffering);
+    }
+  }, [saveProgress, router, toast]);
+
+  const showControlsTemporarily = useCallback(() => {
+    setShowControls(true);
+    if (hideControlsTimeout.current) {
+      clearTimeout(hideControlsTimeout.current);
+    }
+    hideControlsTimeout.current = setTimeout(() => {
+      if (isPlayingRef.current) {
+        setShowControls(false);
+        setShowSpeedMenu(false);
+      }
+    }, CONTROLS_HIDE_DELAY);
+  }, []);
+
+  const togglePlayPause = useCallback(async () => {
     if (videoRef.current) {
-      if (isPlaying) {
+      if (isPlayingRef.current) {
         await videoRef.current.pauseAsync();
       } else {
         await videoRef.current.playAsync();
       }
     }
     showControlsTemporarily();
-  };
+  }, [showControlsTemporarily]);
 
-  const toggleMute = async () => {
+  const toggleMute = useCallback(async () => {
     if (videoRef.current) {
       await videoRef.current.setIsMutedAsync(!isMuted);
       setIsMuted(!isMuted);
     }
     showControlsTemporarily();
-  };
+  }, [isMuted, showControlsTemporarily]);
 
-  const handleVolumeChange = async (newVolume: number) => {
+  const handleVolumeChange = useCallback(async (newVolume: number) => {
     const clamped = Math.max(0, Math.min(1, newVolume));
     setVolume(clamped);
     if (videoRef.current) {
@@ -325,54 +393,70 @@ export default function VideoPlayerScreen() {
         setIsMuted(false);
       }
     }
-  };
+  }, [isMuted]);
 
-  const toggleFullscreen = async () => {
+  const toggleFullscreen = useCallback(async () => {
     try {
-      if (isFullscreen) {
+      if (fullscreenRef.current) {
+        // Exit fullscreen
+        if (Platform.OS === 'web' && typeof document !== 'undefined' && document.fullscreenElement) {
+          await document.exitFullscreen();
+        }
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
         setIsFullscreen(false);
       } else {
+        // Enter fullscreen
+        if (Platform.OS === 'web' && containerRef.current) {
+          // Web: use Fullscreen API on the container
+          const el = containerRef.current as any;
+          if (el.requestFullscreen) {
+            await el.requestFullscreen();
+          } else if (el.webkitRequestFullscreen) {
+            await el.webkitRequestFullscreen();
+          }
+        }
+        // Mobile: lock to landscape
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_RIGHT);
         setIsFullscreen(true);
       }
     } catch (e) {
-      // web may not support orientation lock
+      // Fallback: just toggle the state
       setIsFullscreen(prev => !prev);
     }
     showControlsTemporarily();
-  };
+  }, [showControlsTemporarily]);
 
-  const skip = async (seconds: number) => {
+  // Listen for web fullscreen change events
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const handleFullscreenChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (!isFs) {
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const skip = useCallback(async (seconds: number) => {
     if (videoRef.current) {
-      const newPosition = Math.max(0, Math.min(position + seconds, duration));
+      const newPosition = Math.max(0, Math.min(positionRef.current + seconds, durationRef.current));
       await videoRef.current.setPositionAsync(newPosition * 1000);
       setPosition(newPosition);
     }
     showControlsTemporarily();
-  };
+  }, [showControlsTemporarily]);
 
-  const setSpeed = async (speed: number) => {
+  const setSpeed = useCallback(async (speed: number) => {
     setPlaybackSpeed(speed);
     setShowSpeedMenu(false);
     if (videoRef.current) {
       await videoRef.current.setRateAsync(speed, true);
     }
     showControlsTemporarily();
-  };
-
-  const showControlsTemporarily = () => {
-    setShowControls(true);
-    if (hideControlsTimeout.current) {
-      clearTimeout(hideControlsTimeout.current);
-    }
-    hideControlsTimeout.current = setTimeout(() => {
-      if (isPlaying) {
-        setShowControls(false);
-        setShowSpeedMenu(false);
-      }
-    }, CONTROLS_HIDE_DELAY);
-  };
+  }, [showControlsTemporarily]);
 
   // PanResponder for seek bar dragging
   const seekPanResponder = useRef(
@@ -384,18 +468,18 @@ export default function VideoPlayerScreen() {
         setSeeking(true);
         const x = evt.nativeEvent.locationX;
         const pct = Math.max(0, Math.min(1, x / (seekBarWidth.current || 1)));
-        setSeekPosition(pct * duration);
+        setSeekPosition(pct * durationRef.current);
       },
       onPanResponderMove: (evt) => {
         if (!isSeeking.current) return;
         const x = evt.nativeEvent.locationX;
         const pct = Math.max(0, Math.min(1, x / (seekBarWidth.current || 1)));
-        setSeekPosition(pct * duration);
+        setSeekPosition(pct * durationRef.current);
       },
       onPanResponderRelease: async (evt) => {
         const x = evt.nativeEvent.locationX;
         const pct = Math.max(0, Math.min(1, x / (seekBarWidth.current || 1)));
-        const targetPosition = pct * duration;
+        const targetPosition = pct * durationRef.current;
         setSeeking(false);
         isSeeking.current = false;
         if (videoRef.current) {
@@ -411,33 +495,35 @@ export default function VideoPlayerScreen() {
     })
   ).current;
 
-  const handleSeekBarLayout = (e: LayoutChangeEvent) => {
+  const handleSeekBarLayout = useCallback((e: LayoutChangeEvent) => {
     seekBarWidth.current = e.nativeEvent.layout.width;
-  };
+  }, []);
 
-  const handleBack = async () => {
+  const handleBack = useCallback(async () => {
     try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined' && document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     } catch (e) {}
-    if (user && videoData) {
-      await saveProgress(position);
+    if (userRef.current && videoDataRef.current) {
+      await saveProgress(positionRef.current);
     }
     if (router.canGoBack()) {
       router.back();
     } else {
       router.replace('/');
     }
-  };
+  }, [router, saveProgress]);
 
   // Optimistic like toggle - instant UI update, background DB save
-  const toggleLike = async () => {
+  const toggleLike = useCallback(async () => {
     if (!user || !videoData) {
       toast.warning('Sign in required', 'Please sign in to like videos');
       return;
     }
 
     const wasLiked = isLiked;
-    // Instant UI update
     setIsLiked(!wasLiked);
     setLikeCount(prev => wasLiked ? Math.max(0, prev - 1) : prev + 1);
 
@@ -448,22 +534,20 @@ export default function VideoPlayerScreen() {
         await supabase.from('video_likes').insert({ video_id: videoData.id, user_id: user.id });
       }
     } catch (err) {
-      // Revert on failure
       setIsLiked(wasLiked);
       setLikeCount(prev => wasLiked ? prev + 1 : Math.max(0, prev - 1));
       toast.error('Action failed', 'Please try again');
     }
-  };
+  }, [user, videoData, isLiked, toast]);
 
   // Optimistic favorite toggle - instant UI update, background DB save
-  const toggleFavorite = async () => {
+  const toggleFavorite = useCallback(async () => {
     if (!user || !videoData) {
       toast.warning('Sign in required', 'Please save videos to watch later');
       return;
     }
 
     const wasFav = inFavorites;
-    // Instant UI update
     setInFavorites(!wasFav);
 
     try {
@@ -473,13 +557,12 @@ export default function VideoPlayerScreen() {
         await supabase.from('favorites').insert({ video_id: videoData.id, user_id: user.id });
       }
     } catch (err) {
-      // Revert on failure
       setInFavorites(wasFav);
       toast.error('Action failed', 'Please try again');
     }
-  };
+  }, [user, videoData, inFavorites, toast]);
 
-  const handleShare = async () => {
+  const handleShare = useCallback(async () => {
     if (!videoData) return;
     try {
       if (Platform.OS === 'web' && navigator.share) {
@@ -494,9 +577,9 @@ export default function VideoPlayerScreen() {
     } catch (err) {
       // User cancelled or error
     }
-  };
+  }, [videoData]);
 
-  const handleTap = (side: 'left' | 'right') => {
+  const handleTap = useCallback((side: 'left' | 'right') => {
     const now = Date.now();
     if (now - lastTapTime.current < DOUBLE_TAP_DELAY) {
       if (side === 'left') {
@@ -507,17 +590,26 @@ export default function VideoPlayerScreen() {
     }
     lastTapTime.current = now;
     showControlsTemporarily();
-  };
+  }, [skip, showControlsTemporarily]);
 
-  const toggleAutoplay = () => {
+  const toggleAutoplay = useCallback(() => {
     const newValue = !autoPlayNext;
     setAutoPlayNext(newValue);
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       localStorage.setItem(AUTOPLAY_KEY, String(newValue));
     }
-  };
+  }, [autoPlayNext]);
 
-  const formatTime = (seconds: number): string => {
+  const handleRetry = useCallback(() => {
+    setPlaybackError(null);
+    if (videoRef.current && videoUri) {
+      videoRef.current.replayAsync();
+    } else {
+      fetchVideo();
+    }
+  }, [videoUri, fetchVideo]);
+
+  const formatTime = useCallback((seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
@@ -525,20 +617,44 @@ export default function VideoPlayerScreen() {
       return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  }, []);
 
-  const formatViews = (views: number): string => {
+  const formatViews = useCallback((views: number): string => {
     if (views >= 1000000) return `${(views / 1000000).toFixed(1)}M`;
     if (views >= 1000) return `${(views / 1000).toFixed(1)}K`;
     return views.toString();
-  };
+  }, []);
 
-  const formatDuration = (seconds: number): string => {
+  const formatDuration = useCallback((seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     if (hrs > 0) return `${hrs}h ${mins}m`;
     return `${mins}m`;
-  };
+  }, []);
+
+  // Memoized display calculations to prevent recompute on every render
+  const displayMetrics = useMemo(() => {
+    const containerWidth = screenWidth;
+    const containerHeight = isFullscreen ? screenHeight : Math.min(containerWidth * 0.5625, screenHeight * 0.36);
+
+    let videoDisplayWidth = containerWidth;
+    let videoDisplayHeight = containerHeight;
+
+    if (videoAspect && videoAspect > 0) {
+      const containerAspect = containerWidth / containerHeight;
+      if (videoAspect < containerAspect) {
+        // Portrait: fit by height, black bars on sides
+        videoDisplayHeight = containerHeight;
+        videoDisplayWidth = containerHeight * videoAspect;
+      } else {
+        // Landscape: fit by width
+        videoDisplayWidth = containerWidth;
+        videoDisplayHeight = containerWidth / videoAspect;
+      }
+    }
+
+    return { containerWidth, containerHeight, videoDisplayWidth, videoDisplayHeight };
+  }, [screenWidth, screenHeight, isFullscreen, videoAspect]);
 
   if (loading) {
     return (
@@ -564,34 +680,17 @@ export default function VideoPlayerScreen() {
   }
 
   const progressPercent = duration > 0 ? ((seeking ? seekPosition : position) / duration) * 100 : 0;
-
-  // Calculate video display dimensions based on aspect ratio
-  // Portrait videos (aspect < 1) get black bars on left/right, landscape fills normally
-  const containerWidth = isFullscreen ? screenWidth : screenWidth;
-  const containerHeight = isFullscreen ? screenHeight : Math.min(containerWidth * 0.5625, screenHeight * 0.36);
-
-  let videoDisplayWidth = containerWidth;
-  let videoDisplayHeight = containerHeight;
-
-  if (videoAspect && videoAspect > 0) {
-    const containerAspect = containerWidth / containerHeight;
-    if (videoAspect < containerAspect) {
-      // Video is taller (portrait) relative to container - fit by height, add side bars
-      videoDisplayHeight = containerHeight;
-      videoDisplayWidth = containerHeight * videoAspect;
-    } else {
-      // Video is wider relative to container - fit by width, add top/bottom bars
-      videoDisplayWidth = containerWidth;
-      videoDisplayHeight = containerWidth / videoAspect;
-    }
-  }
+  const { containerWidth, containerHeight, videoDisplayWidth, videoDisplayHeight } = displayMetrics;
 
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <StatusBar hidden={isFullscreen} />
       <View style={[styles.container, isFullscreen && styles.fullscreenContainer]}>
-        <View style={[styles.videoWrapper, { width: containerWidth, height: containerHeight }]}>
+        <View
+          ref={containerRef}
+          style={[styles.videoWrapper, { width: containerWidth, height: containerHeight }]}
+        >
           <View style={styles.videoCenterContainer}>
             <Video
               ref={videoRef}
@@ -606,13 +705,28 @@ export default function VideoPlayerScreen() {
             />
           </View>
 
-          {buffering && (
-            <View style={styles.bufferingOverlay}>
+          {buffering && !playbackError && (
+            <View style={styles.bufferingOverlay} pointerEvents="none">
               <ActivityIndicator size="large" color={Colors.primary} />
             </View>
           )}
 
-          {showControls && (
+          {playbackError && (
+            <View style={styles.playbackErrorOverlay}>
+              <View style={styles.playbackErrorCard}>
+                <Text style={styles.playbackErrorTitle}>Playback Error</Text>
+                <Text style={styles.playbackErrorDesc}>
+                  {typeof playbackError === 'string' ? playbackError : 'Unable to play this video. Please try again.'}
+                </Text>
+                <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
+                  <RotateCcw size={18} color={Colors.text.primary} />
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {showControls && !playbackError && (
             <Animated.View
               entering={FadeIn.duration(200)}
               exiting={FadeOut.duration(200)}
@@ -662,7 +776,6 @@ export default function VideoPlayerScreen() {
                 <View style={styles.progressRow}>
                   <Text style={styles.timeText}>{formatTime(seeking ? seekPosition : position)}</Text>
                   <View
-                    ref={seekBarRef}
                     style={styles.seekBar}
                     {...seekPanResponder.panHandlers}
                     onLayout={handleSeekBarLayout}
@@ -679,7 +792,6 @@ export default function VideoPlayerScreen() {
                     <TouchableOpacity style={styles.controlButton} onPress={toggleMute}>
                       {isMuted ? <VolumeX size={22} color={Colors.text.primary} /> : <Volume2 size={22} color={Colors.text.primary} />}
                     </TouchableOpacity>
-                    {/* Volume slider */}
                     <View style={styles.volumeSliderContainer}>
                       <View style={styles.volumeSliderTrack}>
                         <View style={[styles.volumeSliderFill, { width: `${(isMuted ? 0 : volume) * 100}%` }]} />
@@ -713,7 +825,7 @@ export default function VideoPlayerScreen() {
             </Animated.View>
           )}
 
-          {!showControls && (
+          {!showControls && !playbackError && (
             <TouchableOpacity
               style={styles.tapToShowControls}
               activeOpacity={1}
@@ -1010,6 +1122,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
   },
+  playbackErrorOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+  },
+  playbackErrorCard: {
+    backgroundColor: Colors.card,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.xl,
+    alignItems: 'center',
+    gap: Spacing.sm,
+    maxWidth: 320,
+  },
+  playbackErrorTitle: { fontSize: FontSizes.lg, fontWeight: FontWeights.bold, color: Colors.text.primary },
+  playbackErrorDesc: { fontSize: FontSizes.sm, color: Colors.text.secondary, textAlign: 'center', lineHeight: 20 },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    marginTop: Spacing.sm,
+  },
+  retryText: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text.primary },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background, gap: Spacing.md },
   loadingText: { fontSize: FontSizes.md, color: Colors.text.secondary },
   errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background, padding: 48, gap: Spacing.md },
