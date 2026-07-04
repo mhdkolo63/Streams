@@ -73,13 +73,13 @@ export default function HistoryScreen() {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Subscribe to changes
+  // Subscribe to changes - only INSERT (new video started), not UPDATE (progress saves every 5s)
   useEffect(() => {
     if (!user) return;
 
     const channel = supabase
       .channel('history-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'watch_history', filter: `user_id=eq.${user.id}` }, () => fetchHistory())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'watch_history', filter: `user_id=eq.${user.id}` }, () => fetchHistory())
       .subscribe();
 
     return () => {

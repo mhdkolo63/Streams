@@ -147,24 +147,27 @@ export default function VideoDetailScreen() {
   const toggleFavorites = async () => {
     if (!user || !video || addingToFavorites) return;
 
+    const wasFav = inFavorites;
+    // Instant UI update (optimistic)
+    setInFavorites(!wasFav);
     setAddingToFavorites(true);
 
     try {
-      if (inFavorites) {
+      if (wasFav) {
         await supabase
           .from('favorites')
           .delete()
           .eq('video_id', video.id)
           .eq('user_id', user.id);
-        setInFavorites(false);
       } else {
         await supabase.from('favorites').insert({
           video_id: video.id,
           user_id: user.id,
         });
-        setInFavorites(true);
       }
     } catch (error) {
+      // Revert on failure
+      setInFavorites(wasFav);
       console.error('Error toggling favorites:', error);
     } finally {
       setAddingToFavorites(false);

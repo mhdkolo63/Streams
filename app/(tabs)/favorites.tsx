@@ -83,7 +83,7 @@ export default function FavoritesScreen() {
 
     const channel = supabase
       .channel('favorites-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'favorites', filter: `user_id=eq.${user.id}` }, () => fetchFavorites())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'favorites', filter: `user_id=eq.${user.id}` }, () => fetchFavorites())
       .subscribe();
 
     return () => {
@@ -136,13 +136,16 @@ export default function FavoritesScreen() {
 
   const removeFavorite = async (videoId: string) => {
     if (!user) return;
+    // Optimistic UI - remove from list immediately
+    setFavorites(prev => prev.filter(v => v.id !== videoId));
+    toast.info('Removed from My List');
     try {
       await supabase.from('favorites').delete().eq('video_id', videoId).eq('user_id', user.id);
-      setFavorites(prev => prev.filter(v => v.id !== videoId));
-      toast.info('Removed from My List');
     } catch (error) {
       console.error('Error removing favorite:', error);
       toast.error('Failed to remove', 'Please try again');
+      // Revert on failure - refetch
+      fetchFavorites();
     }
   };
 

@@ -175,18 +175,23 @@ export default function HomeScreen() {
     }
   }, [featuredVideos.length]);
 
+  // Only refetch on new video INSERTs (new uploads), NOT on UPDATEs
+  // UPDATEs fire when views_count/like_count change from the player, causing refreshes
   useEffect(() => {
     const channel = supabase
       .channel('videos-changes')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'videos', filter: 'status=eq.published' }, () => fetchData())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'videos' }, () => fetchData())
       .subscribe();
 
+    // Only update unread count on notification changes, don't refetch all data
     let notifChannel: ReturnType<typeof supabase.channel> | null = null;
     if (user) {
       notifChannel = supabase
         .channel('home-notifications')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, () => fetchData())
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, () => {
+          supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('is_read', false)
+            .then(({ count }) => setUnreadCount(count || 0));
+        })
         .subscribe();
     }
 

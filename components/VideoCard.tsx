@@ -1,5 +1,5 @@
 import React, { memo, useState } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Pressable, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -9,7 +9,7 @@ import Animated, {
   FadeIn,
   ZoomIn,
 } from 'react-native-reanimated';
-import { Play, Eye, Star, Clock } from 'lucide-react-native';
+import { Play, Eye, Clock, Film, Calendar } from 'lucide-react-native';
 import { Colors, BorderRadius, FontSizes, FontWeights, Spacing } from '@/constants/theme';
 import { Video } from '@/lib/supabase';
 
@@ -34,8 +34,10 @@ function VideoCardComponent({
   showDetails = true,
 }: VideoCardProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0);
+  const overlayOpacity = useSharedValue(0);
 
   const getCardWidth = () => {
     switch (size) {
@@ -64,15 +66,33 @@ function VideoCardComponent({
   }));
 
   const handlePressIn = () => {
-    scale.value = withSpring(0.97, { damping: 15, stiffness: 300 });
+    scale.value = withSpring(0.96, { damping: 15, stiffness: 300 });
   };
 
   const handlePressOut = () => {
     scale.value = withSpring(1, { damping: 15, stiffness: 300 });
   };
 
+  const handleHoverIn = () => {
+    if (Platform.OS === 'web') {
+      setHovered(true);
+      overlayOpacity.value = withTiming(1, { duration: 200 });
+    }
+  };
+
+  const handleHoverOut = () => {
+    if (Platform.OS === 'web') {
+      setHovered(false);
+      overlayOpacity.value = withTiming(0, { duration: 200 });
+    }
+  };
+
   const imageAnimatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
+  }));
+
+  const hoverOverlayStyle = useAnimatedStyle(() => ({
+    opacity: overlayOpacity.value,
   }));
 
   const handleImageLoad = () => {
@@ -81,21 +101,25 @@ function VideoCardComponent({
   };
 
   const duration = formatDuration(video.duration);
+  const uploadDate = video.created_at
+    ? new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '';
+  const thumbnailUri = video.thumbnail_url || `https://picsum.photos/seed/${video.id}/640/360`;
 
   return (
     <AnimatedPressable
       onPress={onPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
+      onHoverIn={handleHoverIn}
+      onHoverOut={handleHoverOut}
       style={[styles.container, { width: getCardWidth() }, animatedStyle]}
       android_ripple={{ color: 'rgba(255,255,255,0.1)', borderless: false }}
     >
       <View style={[styles.thumbnailContainer, { height: getImageHeight() }]}>
         {!imageLoaded && <View style={styles.imagePlaceholder} />}
         <Animated.Image
-          source={{
-            uri: video.thumbnail_url || 'https://images.unsplash.com/photo-1489594927165-fd5a049b6667?w=400&h=225&fit=crop',
-          }}
+          source={{ uri: thumbnailUri }}
           style={[styles.thumbnail, imageAnimatedStyle]}
           resizeMode="cover"
           onLoad={handleImageLoad}
@@ -108,13 +132,21 @@ function VideoCardComponent({
           </View>
         </Animated.View>
 
+        {/* Hover overlay for web - shows extra info */}
+        {Platform.OS === 'web' && (
+          <Animated.View style={[styles.hoverOverlay, hoverOverlayStyle]}>
+            <View style={styles.hoverPlayButton}>
+              <Play size={28} color={Colors.text.primary} fill={Colors.text.primary} />
+            </View>
+          </Animated.View>
+        )}
+
         <Animated.View entering={FadeIn.delay(150).duration(200)} style={styles.durationBadge}>
           <Text style={styles.durationText}>{duration}</Text>
         </Animated.View>
 
         {video.featured && (
           <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.featuredBadge}>
-            <Star size={10} color={Colors.primary} fill={Colors.primary} />
             <Text style={styles.featuredText}>Featured</Text>
           </Animated.View>
         )}
@@ -140,22 +172,33 @@ function VideoCardComponent({
             {video.title}
           </Text>
           <View style={styles.metaRow}>
+            {video.genre && (
+              <View style={styles.metaItem}>
+                <Film size={11} color={Colors.text.muted} />
+                <Text style={styles.meta} numberOfLines={1}>{video.genre}</Text>
+              </View>
+            )}
             {video.release_year && (
-              <Text style={styles.meta}>{video.release_year}</Text>
-            )}
-            {video.release_year && video.genre && (
-              <Text style={styles.metaDot}>·</Text>
-            )}
-            {video.genre && size !== 'small' && (
-              <Text style={styles.meta} numberOfLines={1}>{video.genre}</Text>
+              <>
+                {video.genre && <Text style={styles.metaDot}>·</Text>}
+                <Text style={styles.meta}>{video.release_year}</Text>
+              </>
             )}
           </View>
-          {video.views_count > 0 && size !== 'small' && (
-            <View style={styles.viewsContainer}>
-              <Eye size={12} color={Colors.text.muted} />
-              <Text style={styles.views}>{formatViews(video.views_count)} views</Text>
-            </View>
-          )}
+          <View style={styles.metaRow}>
+            {video.views_count > 0 && (
+              <View style={styles.metaItem}>
+                <Eye size={11} color={Colors.text.muted} />
+                <Text style={styles.meta}>{formatViews(video.views_count)} views</Text>
+              </View>
+            )}
+            {uploadDate && (
+              <>
+                {video.views_count > 0 && <Text style={styles.metaDot}>·</Text>}
+                <Text style={styles.meta}>{uploadDate}</Text>
+            </>
+            )}
+          </View>
         </View>
       )}
     </AnimatedPressable>
@@ -209,6 +252,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  hoverOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hoverPlayButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(229, 9, 20, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingLeft: 2,
+  },
   playButtonContainer: {
     opacity: 0.9,
   },
@@ -244,9 +302,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.sm,
     paddingVertical: 3,
     borderRadius: BorderRadius.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
   },
   featuredText: {
     color: Colors.text.primary,
@@ -293,30 +348,26 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
     fontSize: FontSizes.md,
     fontWeight: FontWeights.semibold,
-    marginBottom: 2,
+    marginBottom: 4,
     lineHeight: 18,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 2,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
   meta: {
     color: Colors.text.secondary,
-    fontSize: FontSizes.sm,
+    fontSize: FontSizes.xs,
   },
   metaDot: {
     color: Colors.text.muted,
-    fontSize: FontSizes.sm,
-    marginHorizontal: 4,
-  },
-  viewsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  views: {
-    color: Colors.text.muted,
     fontSize: FontSizes.xs,
+    marginHorizontal: 4,
   },
 });

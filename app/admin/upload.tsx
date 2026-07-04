@@ -110,10 +110,42 @@ export default function UploadVideoScreen() {
         setVideoFile(file);
         setErrors(prev => ({ ...prev, video: '' }));
         toast.success('Video selected', file.name || 'Ready to upload');
-        // Estimate duration from file size (rough estimate)
-        if (file.size) {
-          // Rough estimate: ~1MB per minute at 720p
-          const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024)); // ~5MB per minute
+
+        // Auto-generate thumbnail from video frame (web only)
+        if (isWeb && file.uri) {
+          try {
+            const generatedThumb = await generateThumbnailFromVideo(file.uri);
+            if (generatedThumb && !thumbnailFile) {
+              setThumbnailFile({
+                uri: generatedThumb,
+                name: `thumb_${Date.now()}.jpg`,
+                mimeType: 'image/jpeg',
+              });
+              toast.success('Thumbnail auto-generated', 'From first frame of video');
+            }
+          } catch (e) {
+            console.error('Auto thumbnail generation failed:', e);
+          }
+        }
+
+        // Get real duration from video metadata (web only)
+        if (isWeb && file.uri) {
+          try {
+            const realDuration = await getVideoDuration(file.uri);
+            if (realDuration > 0) {
+              setDuration(Math.round(realDuration).toString());
+            } else if (file.size) {
+              const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
+              setDuration((estimatedMinutes * 60).toString());
+            }
+          } catch (e) {
+            if (file.size) {
+              const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
+              setDuration((estimatedMinutes * 60).toString());
+            }
+          }
+        } else if (file.size) {
+          const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
           setDuration((estimatedMinutes * 60).toString());
         }
       }
@@ -121,6 +153,67 @@ export default function UploadVideoScreen() {
       console.error('Error picking video:', error);
       toast.error('Failed to pick video', 'Please try again');
     }
+  };
+
+  // Generate thumbnail from video's first few seconds using HTML5 video element
+  const generateThumbnailFromVideo = (videoUri: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      try {
+        const video = document.createElement('video');
+        video.crossOrigin = 'anonymous';
+        video.muted = true;
+        video.preload = 'metadata';
+        video.src = videoUri;
+
+        video.addEventListener('loadeddata', () => {
+          // Seek to 2 seconds or 10% of duration, whichever is smaller
+          const seekTime = Math.min(2, (video.duration || 10) * 0.1);
+          video.currentTime = seekTime;
+        });
+
+        video.addEventListener('seeked', () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 360;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(null);
+              return;
+            }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            resolve(dataUrl);
+          } catch (e) {
+            resolve(null);
+          }
+        });
+
+        video.addEventListener('error', () => resolve(null));
+        // Timeout fallback
+        setTimeout(() => resolve(null), 10000);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  };
+
+  // Get video duration from metadata
+  const getVideoDuration = (videoUri: string): Promise<number> => {
+    return new Promise((resolve) => {
+      try {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.src = videoUri;
+        video.addEventListener('loadedmetadata', () => {
+          resolve(video.duration || 0);
+        });
+        video.addEventListener('error', () => resolve(0));
+        setTimeout(() => resolve(0), 5000);
+      } catch (e) {
+        resolve(0);
+      }
+    });
   };
 
   const pickThumbnail = async () => {
