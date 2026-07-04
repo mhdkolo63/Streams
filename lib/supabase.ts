@@ -72,12 +72,17 @@ export interface Video {
   rating: string | null;
   video_cast: string[] | null;
   director: string | null;
+  producer: string | null;
+  language: string | null;
+  tags: string[] | null;
+  resolution: string | null;
+  aspect_ratio: string | null;
   featured: boolean;
   trending: boolean;
   views_count: number;
   like_count: number;
   uploader_id: string | null;
-  status: 'draft' | 'published' | 'unpublished';
+  status: 'draft' | 'published' | 'unpublished' | 'private';
   created_at: string;
   updated_at: string;
   categories?: Category[];

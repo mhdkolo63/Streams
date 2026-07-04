@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   Dimensions,
   Image,
+  TextInput,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
@@ -30,8 +31,18 @@ import {
   Play,
   Trash2,
   ArrowLeft,
+  Globe,
+  Users,
+  Clapperboard,
+  Megaphone,
+  Eye,
+  EyeOff,
+  Lock,
+  FileText,
+  Monitor,
+  Smartphone,
 } from 'lucide-react-native';
-import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInRight } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { supabase, Category } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
@@ -43,10 +54,25 @@ import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constan
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
 
+const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+const SUPPORTED_FORMATS = ['mp4', 'mov', 'webm', 'mkv'];
+const SUPPORTED_THUMB_FORMATS = ['jpg', 'jpeg', 'png', 'webp'];
+
+type Visibility = 'published' | 'private' | 'draft';
+
+interface VideoMeta {
+  duration: number;
+  width: number;
+  height: number;
+  aspectRatio: string;
+  resolution: string;
+}
+
 export default function UploadVideoScreen() {
   const router = useRouter();
   const { user, isAdmin, loading: authLoading } = useAuth();
   const toast = useToast();
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -55,16 +81,31 @@ export default function UploadVideoScreen() {
   const [duration, setDuration] = useState('');
   const [releaseYear, setReleaseYear] = useState('');
   const [genre, setGenre] = useState('');
+  const [language, setLanguage] = useState('');
+  const [cast, setCast] = useState('');
+  const [director, setDirector] = useState('');
+  const [producer, setProducer] = useState('');
+  const [tags, setTags] = useState('');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [featured, setFeatured] = useState(false);
   const [trending, setTrending] = useState(false);
+  const [visibility, setVisibility] = useState<Visibility>('published');
+  const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
+
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStage, setUploadStage] = useState('');
+  const [uploadSpeed, setUploadSpeed] = useState('');
+  const [uploadEta, setUploadEta] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+
+  const uploadStartTime = useRef(0);
+  const uploadedBytes = useRef(0);
+  const totalBytes = useRef(0);
+  const dragCounter = useRef(0);
 
   useEffect(() => {
     if (authLoading) return;
@@ -98,6 +139,79 @@ export default function UploadVideoScreen() {
     );
   }
 
+  const validateVideoFile = (file: any): string | null => {
+    if (!file) return 'No file selected';
+    const ext = file.name?.split('.').pop()?.toLowerCase() || '';
+    if (!SUPPORTED_FORMATS.includes(ext)) {
+      return `Unsupported format: .${ext}. Supported: ${SUPPORTED_FORMATS.join(', ').toUpperCase()}`;
+    }
+    if (file.size && file.size > MAX_FILE_SIZE) {
+      return `File too large: ${formatFileSize(file.size)}. Maximum: ${formatFileSize(MAX_FILE_SIZE)}`;
+    }
+    return null;
+  };
+
+  const validateThumbnailFile = (file: any): string | null => {
+    if (!file) return null;
+    const ext = file.name?.split('.').pop()?.toLowerCase() || '';
+    const uri = file.uri || '';
+    if (uri.startsWith('data:image/')) return null; // data URL from auto-gen
+    if (!SUPPORTED_THUMB_FORMATS.includes(ext)) {
+      return `Unsupported thumbnail format: .${ext}. Supported: ${SUPPORTED_THUMB_FORMATS.join(', ').toUpperCase()}`;
+    }
+    return null;
+  };
+
+  const handleVideoSelected = async (file: any) => {
+    const validationError = validateVideoFile(file);
+    if (validationError) {
+      setErrorMessage(validationError);
+      toast.error('Invalid video file', validationError);
+      return;
+    }
+
+    setErrorMessage(null);
+    setVideoFile(file);
+    setErrors(prev => ({ ...prev, video: '' }));
+    toast.success('Video selected', file.name || 'Ready to upload');
+
+    // Auto-detect metadata (web only)
+    if (isWeb && file.uri) {
+      try {
+        const meta = await getVideoMetadata(file.uri);
+        if (meta) {
+          setVideoMeta(meta);
+          setDuration(Math.round(meta.duration).toString());
+        }
+      } catch (e) {
+        if (file.size) {
+          const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
+          setDuration((estimatedMinutes * 60).toString());
+        }
+      }
+
+      // Auto-generate thumbnail if none selected
+      if (!thumbnailFile) {
+        try {
+          const generatedThumb = await generateThumbnailFromVideo(file.uri);
+          if (generatedThumb) {
+            setThumbnailFile({
+              uri: generatedThumb,
+              name: `thumb_${Date.now()}.jpg`,
+              mimeType: 'image/jpeg',
+            });
+            toast.success('Thumbnail auto-generated', 'From first frame of video');
+          }
+        } catch (e) {
+          console.error('Auto thumbnail generation failed:', e);
+        }
+      }
+    } else if (file.size) {
+      const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
+      setDuration((estimatedMinutes * 60).toString());
+    }
+  };
+
   const pickVideo = async () => {
     try {
       setErrorMessage(null);
@@ -106,52 +220,56 @@ export default function UploadVideoScreen() {
         copyToCacheDirectory: true,
       });
       if (result.assets && result.assets.length > 0) {
-        const file = result.assets[0];
-        setVideoFile(file);
-        setErrors(prev => ({ ...prev, video: '' }));
-        toast.success('Video selected', file.name || 'Ready to upload');
-
-        // Auto-generate thumbnail from video frame (web only)
-        if (isWeb && file.uri) {
-          try {
-            const generatedThumb = await generateThumbnailFromVideo(file.uri);
-            if (generatedThumb && !thumbnailFile) {
-              setThumbnailFile({
-                uri: generatedThumb,
-                name: `thumb_${Date.now()}.jpg`,
-                mimeType: 'image/jpeg',
-              });
-              toast.success('Thumbnail auto-generated', 'From first frame of video');
-            }
-          } catch (e) {
-            console.error('Auto thumbnail generation failed:', e);
-          }
-        }
-
-        // Get real duration from video metadata (web only)
-        if (isWeb && file.uri) {
-          try {
-            const realDuration = await getVideoDuration(file.uri);
-            if (realDuration > 0) {
-              setDuration(Math.round(realDuration).toString());
-            } else if (file.size) {
-              const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
-              setDuration((estimatedMinutes * 60).toString());
-            }
-          } catch (e) {
-            if (file.size) {
-              const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
-              setDuration((estimatedMinutes * 60).toString());
-            }
-          }
-        } else if (file.size) {
-          const estimatedMinutes = Math.ceil(file.size / (5 * 1024 * 1024));
-          setDuration((estimatedMinutes * 60).toString());
-        }
+        await handleVideoSelected(result.assets[0]);
       }
     } catch (error) {
       console.error('Error picking video:', error);
       toast.error('Failed to pick video', 'Please try again');
+    }
+  };
+
+  // Web drag-and-drop handlers
+  const handleDragEnter = (e: any) => {
+    if (!isWeb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    setDragActive(true);
+  };
+
+  const handleDragLeave = (e: any) => {
+    if (!isWeb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setDragActive(false);
+    }
+  };
+
+  const handleDragOver = (e: any) => {
+    if (!isWeb) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: any) => {
+    if (!isWeb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setDragActive(false);
+
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      const fileObj = {
+        uri: URL.createObjectURL(file),
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+      };
+      await handleVideoSelected(fileObj);
     }
   };
 
@@ -166,7 +284,6 @@ export default function UploadVideoScreen() {
         video.src = videoUri;
 
         video.addEventListener('loadeddata', () => {
-          // Seek to 2 seconds or 10% of duration, whichever is smaller
           const seekTime = Math.min(2, (video.duration || 10) * 0.1);
           video.currentTime = seekTime;
         });
@@ -177,43 +294,61 @@ export default function UploadVideoScreen() {
             canvas.width = video.videoWidth || 640;
             canvas.height = video.videoHeight || 360;
             const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              resolve(null);
-              return;
-            }
+            if (!ctx) { resolve(null); return; }
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
             resolve(dataUrl);
-          } catch (e) {
-            resolve(null);
-          }
+          } catch (e) { resolve(null); }
         });
 
         video.addEventListener('error', () => resolve(null));
-        // Timeout fallback
         setTimeout(() => resolve(null), 10000);
-      } catch (e) {
-        resolve(null);
-      }
+      } catch (e) { resolve(null); }
     });
   };
 
-  // Get video duration from metadata
-  const getVideoDuration = (videoUri: string): Promise<number> => {
+  // Get full video metadata: duration, resolution, aspect ratio
+  const getVideoMetadata = (videoUri: string): Promise<VideoMeta | null> => {
     return new Promise((resolve) => {
       try {
         const video = document.createElement('video');
         video.preload = 'metadata';
         video.src = videoUri;
         video.addEventListener('loadedmetadata', () => {
-          resolve(video.duration || 0);
+          const w = video.videoWidth || 0;
+          const h = video.videoHeight || 0;
+          const dur = video.duration || 0;
+          const aspectRatio = computeAspectRatio(w, h);
+          resolve({
+            duration: dur,
+            width: w,
+            height: h,
+            aspectRatio,
+            resolution: w > 0 && h > 0 ? `${w}x${h}` : '',
+          });
         });
-        video.addEventListener('error', () => resolve(0));
-        setTimeout(() => resolve(0), 5000);
-      } catch (e) {
-        resolve(0);
-      }
+        video.addEventListener('error', () => resolve(null));
+        setTimeout(() => resolve(null), 5000);
+      } catch (e) { resolve(null); }
     });
+  };
+
+  const computeAspectRatio = (w: number, h: number): string => {
+    if (!w || !h) return '';
+    const ratio = w / h;
+    const common: Record<string, number> = {
+      '16:9': 16 / 9,
+      '9:16': 9 / 16,
+      '4:3': 4 / 3,
+      '3:4': 3 / 4,
+      '1:1': 1,
+      '21:9': 21 / 9,
+      '2.35:1': 2.35,
+    };
+    for (const [label, val] of Object.entries(common)) {
+      if (Math.abs(ratio - val) < 0.02) return label;
+    }
+    return `${w}:${h}`;
   };
 
   const pickThumbnail = async () => {
@@ -226,7 +361,14 @@ export default function UploadVideoScreen() {
         aspect: [16, 9],
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setThumbnailFile(result.assets[0]);
+        const file = result.assets[0];
+        const validationError = validateThumbnailFile(file);
+        if (validationError) {
+          setErrorMessage(validationError);
+          toast.error('Invalid thumbnail', validationError);
+          return;
+        }
+        setThumbnailFile(file);
         toast.success('Thumbnail selected');
       }
     } catch (error) {
@@ -241,13 +383,36 @@ export default function UploadVideoScreen() {
     );
   };
 
-  const validateForm = () => {
+  const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
     if (!title.trim()) newErrors.title = 'Title is required';
     if (!videoFile) newErrors.video = 'Video file is required';
     if (!duration || parseInt(duration) === 0) newErrors.duration = 'Duration is required';
+    if (selectedCategories.length === 0) newErrors.category = 'At least one category is required';
+    if (!thumbnailFile) newErrors.thumbnail = 'Thumbnail is required (upload one or it will be auto-generated)';
+
     setErrors(newErrors);
+
+    if (Object.keys(newErrors).length > 0) {
+      const firstError = Object.values(newErrors)[0];
+      toast.error('Validation failed', firstError);
+    }
     return Object.keys(newErrors).length === 0;
+  };
+
+  const formatUploadSpeed = (bytesPerSec: number): string => {
+    if (bytesPerSec >= 1073741824) return `${(bytesPerSec / 1073741824).toFixed(1)} GB/s`;
+    if (bytesPerSec >= 1048576) return `${(bytesPerSec / 1048576).toFixed(1)} MB/s`;
+    if (bytesPerSec >= 1024) return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
+    return `${bytesPerSec} B/s`;
+  };
+
+  const formatEta = (seconds: number): string => {
+    if (seconds <= 0 || !isFinite(seconds)) return '';
+    if (seconds < 60) return `${Math.ceil(seconds)}s remaining`;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.ceil(seconds % 60);
+    return `${mins}m ${secs}s remaining`;
   };
 
   const handleUpload = async () => {
@@ -259,6 +424,8 @@ export default function UploadVideoScreen() {
     setUploading(true);
     setUploadProgress(0);
     setUploadStage('Preparing upload...');
+    setUploadSpeed('');
+    setUploadEta('');
 
     try {
       let videoUrl = null;
@@ -273,9 +440,25 @@ export default function UploadVideoScreen() {
         const response = await fetch(videoFile.uri);
         const blob = await response.blob();
 
-        // Simulate progress (Supabase JS doesn't expose real progress)
+        totalBytes.current = blob.size;
+        uploadedBytes.current = 0;
+        uploadStartTime.current = Date.now();
+
+        // Simulate progress with time-based estimation (Supabase JS doesn't expose real progress)
         const progressInterval = setInterval(() => {
-          setUploadProgress(prev => Math.min(prev + 2, 55));
+          const elapsed = (Date.now() - uploadStartTime.current) / 1000;
+          // Estimate based on typical upload speeds
+          const estimatedProgress = Math.min(55, 5 + (elapsed / Math.max(1, blob.size / (5 * 1024 * 1024))) * 50);
+          setUploadProgress(prev => Math.min(prev + 1, Math.max(prev, estimatedProgress)));
+
+          if (estimatedProgress > 5) {
+            const speed = (blob.size * (estimatedProgress - 5) / 50) / elapsed;
+            setUploadSpeed(formatUploadSpeed(speed));
+            if (speed > 0) {
+              const remaining = (blob.size * (1 - (estimatedProgress - 5) / 50)) / speed;
+              setUploadEta(formatEta(remaining));
+            }
+          }
         }, 500);
 
         const { error: uploadError } = await supabase.storage
@@ -287,9 +470,16 @@ export default function UploadVideoScreen() {
 
         clearInterval(progressInterval);
 
-        if (uploadError) throw new Error(`Video upload failed: ${uploadError.message}`);
+        if (uploadError) {
+          if (uploadError.message.includes('duplicate') || uploadError.message.includes('already exists')) {
+            throw new Error('A video with this file already exists. Duplicate upload prevented.');
+          }
+          throw new Error(`Video upload failed: ${uploadError.message}`);
+        }
 
         setUploadProgress(60);
+        setUploadSpeed('');
+        setUploadEta('');
         const { data: urlData } = supabase.storage.from('videos').getPublicUrl(fileName);
         videoUrl = urlData.publicUrl;
       }
@@ -300,7 +490,7 @@ export default function UploadVideoScreen() {
         setUploadStage('Uploading thumbnail...');
         setUploadProgress(65);
 
-        const thumbExt = thumbnailFile.uri.split('.').pop() || 'jpg';
+        const thumbExt = thumbnailFile.uri.startsWith('data:image/') ? 'jpg' : (thumbnailFile.uri.split('.').pop() || 'jpg');
         const thumbName = `thumbnails/${Date.now()}_${Math.random().toString(36).substring(7)}.${thumbExt}`;
         const thumbResponse = await fetch(thumbnailFile.uri);
         const thumbBlob = await thumbResponse.blob();
@@ -312,13 +502,18 @@ export default function UploadVideoScreen() {
         if (!thumbError) {
           const { data: urlData } = supabase.storage.from('thumbnails').getPublicUrl(thumbName);
           thumbnailUrl = urlData.publicUrl;
+        } else if (thumbError.message.includes('duplicate')) {
+          throw new Error('Thumbnail upload failed: file already exists.');
         }
       }
 
       setUploadProgress(75);
-      setUploadStage('Creating video record...');
+      setUploadStage('Saving video record...');
 
-      // Insert video record (notifications are auto-created via trigger)
+      // Parse tags and cast
+      const tagsArray = tags.split(',').map(t => t.trim()).filter(Boolean);
+      const castArray = cast.split(',').map(c => c.trim()).filter(Boolean);
+
       const { data: insertedVideo, error: insertError } = await supabase
         .from('videos')
         .insert({
@@ -329,9 +524,16 @@ export default function UploadVideoScreen() {
           duration: parseInt(duration) || 0,
           release_year: parseInt(releaseYear) || null,
           genre: genre.trim() || null,
+          language: language.trim() || null,
+          video_cast: castArray.length > 0 ? castArray : null,
+          director: director.trim() || null,
+          producer: producer.trim() || null,
+          tags: tagsArray.length > 0 ? tagsArray : null,
+          resolution: videoMeta?.resolution || null,
+          aspect_ratio: videoMeta?.aspectRatio || null,
           featured,
           trending,
-          status: 'published',
+          status: visibility,
           views_count: 0,
           like_count: 0,
           uploader_id: user.id,
@@ -355,9 +557,9 @@ export default function UploadVideoScreen() {
       }
 
       setUploadProgress(100);
-      setUploadStage('Complete!');
-      setSuccessMessage(`"${title.trim()}" uploaded successfully! Users have been notified.`);
-      toast.success('Upload complete!', 'Users have been notified');
+      setUploadStage('Completed');
+      setSuccessMessage(`"${title.trim()}" uploaded successfully!`);
+      toast.success('Video uploaded successfully', visibility === 'published' ? 'Users have been notified' : 'Saved to your library');
 
       // Reset form after delay
       setTimeout(() => {
@@ -368,21 +570,41 @@ export default function UploadVideoScreen() {
         setDuration('');
         setReleaseYear('');
         setGenre('');
+        setLanguage('');
+        setCast('');
+        setDirector('');
+        setProducer('');
+        setTags('');
         setSelectedCategories([]);
         setFeatured(false);
         setTrending(false);
+        setVisibility('published');
+        setVideoMeta(null);
         setUploadProgress(0);
         setUploadStage('');
         setUploading(false);
         setSuccessMessage(null);
+        setUploadSpeed('');
+        setUploadEta('');
       }, 4000);
     } catch (error: any) {
       console.error('Upload error:', error);
-      setErrorMessage(error.message || 'Failed to upload video');
-      toast.error('Upload failed', error.message || 'Please try again');
+      const msg = error.message || 'Failed to upload video';
+      let friendlyMsg = msg;
+      if (msg.includes('network') || msg.includes('fetch')) {
+        friendlyMsg = 'Network error: Please check your internet connection and try again.';
+      } else if (msg.includes('File too large') || msg.includes('size')) {
+        friendlyMsg = `File too large: Maximum size is ${formatFileSize(MAX_FILE_SIZE)}.`;
+      } else if (msg.includes('Unsupported') || msg.includes('format')) {
+        friendlyMsg = `Unsupported format: Use ${SUPPORTED_FORMATS.join(', ').toUpperCase()}.`;
+      }
+      setErrorMessage(friendlyMsg);
+      toast.error('Upload failed', friendlyMsg);
       setUploading(false);
       setUploadProgress(0);
       setUploadStage('');
+      setUploadSpeed('');
+      setUploadEta('');
     }
   };
 
@@ -393,10 +615,25 @@ export default function UploadVideoScreen() {
     return bytes + ' bytes';
   };
 
+  const formatDurationDisplay = (seconds: number): string => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  const visibilityOptions: { value: Visibility; label: string; icon: any; desc: string }[] = [
+    { value: 'published', label: 'Public', icon: Eye, desc: 'Visible to everyone' },
+    { value: 'private', label: 'Private', icon: Lock, desc: 'Only visible to admins' },
+    { value: 'draft', label: 'Draft', icon: FileText, desc: 'Not visible, work in progress' },
+  ];
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Header with Back Button */}
+        {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <ArrowLeft size={24} color={Colors.text.primary} />
@@ -412,7 +649,7 @@ export default function UploadVideoScreen() {
               <CheckCircle size={24} color={Colors.status.success} />
             </View>
             <View style={styles.successContent}>
-              <Text style={styles.successTitle}>Upload Complete</Text>
+              <Text style={styles.successTitle}>Video uploaded successfully</Text>
               <Text style={styles.successText}>{successMessage}</Text>
             </View>
           </Animated.View>
@@ -439,21 +676,110 @@ export default function UploadVideoScreen() {
                 <CheckCircle size={20} color={Colors.status.success} />
               )}
               <Text style={styles.progressStage}>{uploadStage}</Text>
-              <Text style={styles.progressPercent}>{uploadProgress}%</Text>
+              <Text style={styles.progressPercent}>{Math.round(uploadProgress)}%</Text>
             </View>
             <View style={styles.progressBar}>
               <Animated.View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
             </View>
-            <Text style={styles.progressHint}>
-              {uploadProgress < 55 ? 'Uploading video... this may take a few minutes depending on file size' :
-               uploadProgress < 75 ? 'Processing video...' :
-               uploadProgress < 100 ? 'Finalizing...' : 'Upload complete!'}
-            </Text>
+            <View style={styles.progressInfoRow}>
+              {uploadSpeed ? <Text style={styles.progressInfo}>{uploadSpeed}</Text> : null}
+              {uploadEta ? <Text style={styles.progressInfo}>{uploadEta}</Text> : null}
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Video File Section with Drag & Drop */}
+        <Animated.View entering={FadeInUp.delay(50).duration(400)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Video File *</Text>
+          <View
+            style={[styles.uploadArea, dragActive && styles.uploadAreaActive, videoFile && styles.uploadAreaFilled]}
+            {...(isWeb ? {
+              onDragEnter: handleDragEnter,
+              onDragLeave: handleDragLeave,
+              onDragOver: handleDragOver,
+              onDrop: handleDrop,
+            } : {})}
+          >
+            {videoFile ? (
+              <View style={styles.fileInfo}>
+                <View style={styles.fileIcon}>
+                  <FileVideo size={24} color={Colors.status.success} />
+                </View>
+                <View style={styles.fileDetails}>
+                  <Text style={styles.fileName} numberOfLines={1}>{videoFile.name || 'Video selected'}</Text>
+                  {videoFile.size ? <Text style={styles.fileSize}>{formatFileSize(videoFile.size)}</Text> : null}
+                  {videoMeta?.resolution ? (
+                    <Text style={styles.fileMeta}>{videoMeta.resolution} · {videoMeta.aspectRatio}</Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity onPress={() => { setVideoFile(null); setVideoMeta(null); }} disabled={uploading} style={styles.removeFileBtn}>
+                  <Trash2 size={18} color={Colors.status.error} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity onPress={pickVideo} disabled={uploading} activeOpacity={0.8} style={styles.uploadTouchArea}>
+                <View style={styles.uploadPlaceholder}>
+                  <Upload size={40} color={Colors.text.muted} />
+                  <Text style={styles.uploadText}>Click to browse or drag and drop</Text>
+                  <Text style={styles.uploadHint}>MP4, MOV, WEBM up to {formatFileSize(MAX_FILE_SIZE)}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
+          {errors.video && <Text style={styles.error}>{errors.video}</Text>}
+        </Animated.View>
+
+        {/* Video Preview + Thumbnail Preview */}
+        {videoFile && (
+          <Animated.View entering={FadeInUp.delay(100).duration(400)} style={styles.section}>
+            <Text style={styles.sectionTitle}>Preview</Text>
+            <View style={styles.previewRow}>
+              {/* Video Preview */}
+              <View style={styles.previewContainer}>
+                <Text style={styles.previewLabel}>Video</Text>
+                {isWeb && videoFile.uri ? (
+                  <View style={styles.videoPreviewBox}>
+                    <video
+                      src={videoFile.uri}
+                      style={{ width: '100%', height: '100%', borderRadius: BorderRadius.md, objectFit: 'contain' }}
+                      controls
+                      muted
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.videoPreviewBox}>
+                    <Play size={32} color={Colors.text.muted} />
+                  </View>
+                )}
+              </View>
+
+              {/* Thumbnail Preview */}
+              <View style={styles.previewContainer}>
+                <Text style={styles.previewLabel}>Thumbnail</Text>
+                <TouchableOpacity style={styles.thumbnailPreviewBox} onPress={pickThumbnail} disabled={uploading} activeOpacity={0.8}>
+                  {thumbnailFile ? (
+                    <View style={styles.thumbnailPreviewWrapper}>
+                      <Image source={{ uri: thumbnailFile.uri }} style={styles.thumbnailPreviewImage} />
+                      <TouchableOpacity onPress={() => setThumbnailFile(null)} disabled={uploading} style={styles.removeThumbnailBtn}>
+                        <X size={16} color={Colors.text.primary} />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={styles.uploadPlaceholder}>
+                      <ImageIcon size={28} color={Colors.text.muted} />
+                      <Text style={styles.uploadTextSmall}>Upload thumbnail</Text>
+                      <Text style={styles.uploadHint}>JPG, PNG, WebP</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                {errors.thumbnail && <Text style={styles.error}>{errors.thumbnail}</Text>}
+              </View>
+            </View>
           </Animated.View>
         )}
 
         {/* Video Information Section */}
-        <Animated.View entering={FadeInUp.delay(100).duration(400)} style={styles.section}>
+        <Animated.View entering={FadeInUp.delay(150).duration(400)} style={styles.section}>
           <Text style={styles.sectionTitle}>Video Information</Text>
           <Input
             label="Title *"
@@ -477,11 +803,14 @@ export default function UploadVideoScreen() {
                 label="Duration (seconds) *"
                 value={duration}
                 onChangeText={setDuration}
-                placeholder="e.g., 7200"
+                placeholder="Auto-detected"
                 keyboardType="numeric"
                 error={errors.duration}
                 leftIcon={<Clock size={18} color={Colors.text.muted} />}
               />
+              {videoMeta && videoMeta.duration > 0 ? (
+                <Text style={styles.autoDetectHint}>Auto-detected: {formatDurationDisplay(videoMeta.duration)}</Text>
+              ) : null}
             </View>
             <View style={styles.halfWidth}>
               <Input
@@ -494,77 +823,99 @@ export default function UploadVideoScreen() {
               />
             </View>
           </View>
+          <View style={styles.row}>
+            <View style={styles.halfWidth}>
+              <Input
+                label="Genre"
+                value={genre}
+                onChangeText={setGenre}
+                placeholder="Action, Drama..."
+                leftIcon={<Tag size={18} color={Colors.text.muted} />}
+              />
+            </View>
+            <View style={styles.halfWidth}>
+              <Input
+                label="Language"
+                value={language}
+                onChangeText={setLanguage}
+                placeholder="English, Spanish..."
+                leftIcon={<Globe size={18} color={Colors.text.muted} />}
+              />
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Cast & Crew Section */}
+        <Animated.View entering={FadeInUp.delay(200).duration(400)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Cast & Crew</Text>
           <Input
-            label="Genre"
-            value={genre}
-            onChangeText={setGenre}
-            placeholder="e.g., Action, Drama, Comedy"
+            label="Cast"
+            value={cast}
+            onChangeText={setCast}
+            placeholder="Comma-separated, e.g., Actor 1, Actor 2"
+            leftIcon={<Users size={18} color={Colors.text.muted} />}
+          />
+          <View style={styles.row}>
+            <View style={styles.halfWidth}>
+              <Input
+                label="Director"
+                value={director}
+                onChangeText={setDirector}
+                placeholder="Director name"
+                leftIcon={<Clapperboard size={18} color={Colors.text.muted} />}
+              />
+            </View>
+            <View style={styles.halfWidth}>
+              <Input
+                label="Producer"
+                value={producer}
+                onChangeText={setProducer}
+                placeholder="Producer name"
+                leftIcon={<Megaphone size={18} color={Colors.text.muted} />}
+              />
+            </View>
+          </View>
+          <Input
+            label="Tags"
+            value={tags}
+            onChangeText={setTags}
+            placeholder="Comma-separated, e.g., trailer, exclusive, 2024"
             leftIcon={<Tag size={18} color={Colors.text.muted} />}
           />
         </Animated.View>
 
-        {/* Video File Section */}
-        <Animated.View entering={FadeInUp.delay(150).duration(400)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Video File *</Text>
-          <TouchableOpacity
-            style={[styles.uploadArea, dragActive && styles.uploadAreaActive, videoFile && styles.uploadAreaFilled]}
-            onPress={pickVideo}
-            disabled={uploading}
-            activeOpacity={0.8}
-          >
-            {videoFile ? (
-              <View style={styles.fileInfo}>
-                <View style={styles.fileIcon}>
-                  <FileVideo size={24} color={Colors.status.success} />
-                </View>
-                <View style={styles.fileDetails}>
-                  <Text style={styles.fileName} numberOfLines={1}>{videoFile.name || 'Video selected'}</Text>
-                  {videoFile.size && <Text style={styles.fileSize}>{formatFileSize(videoFile.size)}</Text>}
-                </View>
-                <TouchableOpacity onPress={() => setVideoFile(null)} disabled={uploading} style={styles.removeFileBtn}>
-                  <Trash2 size={18} color={Colors.status.error} />
-                </TouchableOpacity>
+        {/* Auto-detected Metadata */}
+        {videoMeta && (
+          <Animated.View entering={FadeInUp.duration(400)} style={styles.section}>
+            <Text style={styles.sectionTitle}>Auto-Detected Metadata</Text>
+            <View style={styles.metaGrid}>
+              <View style={styles.metaBox}>
+                <Monitor size={16} color={Colors.text.muted} />
+                <Text style={styles.metaBoxLabel}>Resolution</Text>
+                <Text style={styles.metaBoxValue}>{videoMeta.resolution || 'Unknown'}</Text>
               </View>
-            ) : (
-              <View style={styles.uploadPlaceholder}>
-                <Upload size={40} color={Colors.text.muted} />
-                <Text style={styles.uploadText}>Click to select video</Text>
-                <Text style={styles.uploadHint}>MP4, MOV, MKV up to 5GB</Text>
-                {isWeb && <Text style={styles.uploadHint}>or drag and drop</Text>}
+              <View style={styles.metaBox}>
+                {videoMeta.aspectRatio && videoMeta.aspectRatio.includes('9:16') || videoMeta.aspectRatio === '9:16' ? (
+                  <Smartphone size={16} color={Colors.text.muted} />
+                ) : (
+                  <Monitor size={16} color={Colors.text.muted} />
+                )}
+                <Text style={styles.metaBoxLabel}>Aspect Ratio</Text>
+                <Text style={styles.metaBoxValue}>{videoMeta.aspectRatio || 'Unknown'}</Text>
               </View>
-            )}
-          </TouchableOpacity>
-          {errors.video && <Text style={styles.error}>{errors.video}</Text>}
-        </Animated.View>
-
-        {/* Thumbnail Section */}
-        <Animated.View entering={FadeInUp.delay(200).duration(400)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Thumbnail Image</Text>
-          <TouchableOpacity style={[styles.uploadArea, styles.thumbnailArea]} onPress={pickThumbnail} disabled={uploading} activeOpacity={0.8}>
-            {thumbnailFile ? (
-              <View style={styles.thumbnailPreview}>
-                <Image
-                  source={{ uri: thumbnailFile.uri }}
-                  style={styles.thumbnailImage}
-                />
-                <TouchableOpacity onPress={() => setThumbnailFile(null)} disabled={uploading} style={styles.removeThumbnailBtn}>
-                  <X size={16} color={Colors.text.primary} />
-                </TouchableOpacity>
+              <View style={styles.metaBox}>
+                <Clock size={16} color={Colors.text.muted} />
+                <Text style={styles.metaBoxLabel}>Duration</Text>
+                <Text style={styles.metaBoxValue}>{formatDurationDisplay(videoMeta.duration)}</Text>
               </View>
-            ) : (
-              <View style={styles.uploadPlaceholder}>
-                <ImageIcon size={36} color={Colors.text.muted} />
-                <Text style={styles.uploadText}>Click to upload thumbnail</Text>
-                <Text style={styles.uploadHint}>JPG, PNG, WebP (16:9 ratio preferred)</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </Animated.View>
+            </View>
+          </Animated.View>
+        )}
 
         {/* Categories Section */}
         <Animated.View entering={FadeInUp.delay(250).duration(400)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Categories</Text>
-          <Text style={styles.sectionHint}>Select categories to organize this video</Text>
+          <Text style={styles.sectionTitle}>Categories *</Text>
+          <Text style={styles.sectionHint}>Select at least one category</Text>
           <View style={styles.categoriesGrid}>
             {categories.map(cat => (
               <TouchableOpacity
@@ -580,11 +931,42 @@ export default function UploadVideoScreen() {
               </TouchableOpacity>
             ))}
           </View>
+          {errors.category && <Text style={styles.error}>{errors.category}</Text>}
         </Animated.View>
 
-        {/* Visibility Options */}
+        {/* Visibility Section */}
         <Animated.View entering={FadeInUp.delay(300).duration(400)} style={styles.section}>
-          <Text style={styles.sectionTitle}>Visibility Options</Text>
+          <Text style={styles.sectionTitle}>Visibility</Text>
+          <View style={styles.visibilityOptions}>
+            {visibilityOptions.map(opt => {
+              const Icon = opt.icon;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[styles.visibilityOption, visibility === opt.value && styles.visibilityOptionActive]}
+                  onPress={() => setVisibility(opt.value)}
+                  disabled={uploading}
+                  activeOpacity={0.7}
+                >
+                  <Icon size={18} color={visibility === opt.value ? Colors.primary : Colors.text.muted} />
+                  <View style={styles.visibilityTextContainer}>
+                    <Text style={[styles.visibilityLabel, visibility === opt.value && styles.visibilityLabelActive]}>
+                      {opt.label}
+                    </Text>
+                    <Text style={styles.visibilityDesc}>{opt.desc}</Text>
+                  </View>
+                  <View style={[styles.radio, visibility === opt.value && styles.radioActive]}>
+                    {visibility === opt.value && <Check size={12} color={Colors.text.primary} />}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Animated.View>
+
+        {/* Featured & Trending */}
+        <Animated.View entering={FadeInUp.delay(350).duration(400)} style={styles.section}>
+          <Text style={styles.sectionTitle}>Promotion</Text>
           <TouchableOpacity style={styles.checkboxRow} onPress={() => setFeatured(!featured)} disabled={uploading} activeOpacity={0.7}>
             <View style={[styles.checkbox, featured && styles.checkboxActive]}>
               {featured && <Check size={16} color={Colors.text.primary} />}
@@ -612,9 +994,9 @@ export default function UploadVideoScreen() {
         </Animated.View>
 
         {/* Submit Button */}
-        <Animated.View entering={FadeInUp.delay(350).duration(400)}>
+        <Animated.View entering={FadeInUp.delay(400).duration(400)}>
           <Button
-            title={uploading ? 'Uploading...' : 'Upload Video'}
+            title={uploading ? uploadStage || 'Uploading...' : 'Upload Video'}
             onPress={handleUpload}
             loading={uploading}
             disabled={uploading}
@@ -622,7 +1004,11 @@ export default function UploadVideoScreen() {
             icon={<Upload size={18} color={Colors.text.primary} />}
           />
           <Text style={styles.submitHint}>
-            Video will be published immediately and users will be notified
+            {visibility === 'published'
+              ? 'Video will be published immediately and users will be notified'
+              : visibility === 'private'
+              ? 'Video will be private — only admins can see it'
+              : 'Video will be saved as a draft — not visible to users'}
           </Text>
         </Animated.View>
       </ScrollView>
@@ -650,22 +1036,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.card,
+    minHeight: 160,
   },
   uploadAreaActive: { borderColor: Colors.primary, backgroundColor: 'rgba(229, 9, 20, 0.05)' },
   uploadAreaFilled: { borderStyle: 'solid', borderColor: Colors.status.success },
+  uploadTouchArea: { width: '100%', alignItems: 'center' },
   uploadPlaceholder: { alignItems: 'center' },
   uploadText: { fontSize: FontSizes.md, color: Colors.text.secondary, marginTop: Spacing.sm },
+  uploadTextSmall: { fontSize: FontSizes.sm, color: Colors.text.secondary, marginTop: Spacing.xs },
   uploadHint: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: Spacing.xs },
   fileInfo: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, width: '100%' },
   fileIcon: { width: 48, height: 48, borderRadius: BorderRadius.md, backgroundColor: 'rgba(34, 197, 94, 0.1)', justifyContent: 'center', alignItems: 'center' },
   fileDetails: { flex: 1 },
   fileName: { fontSize: FontSizes.md, color: Colors.text.primary, fontWeight: FontWeights.medium },
   fileSize: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: 2 },
+  fileMeta: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: 2 },
   removeFileBtn: { padding: Spacing.sm },
-  thumbnailArea: { height: 180 },
-  thumbnailPreview: { width: '100%', height: '100%', position: 'relative' },
-  thumbnailImage: { width: '100%', height: '100%', borderRadius: BorderRadius.lg },
-  removeThumbnailBtn: { position: 'absolute', top: Spacing.sm, right: Spacing.sm, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0, 0, 0, 0.6)', justifyContent: 'center', alignItems: 'center' },
+  autoDetectHint: { fontSize: FontSizes.xs, color: Colors.status.success, marginTop: Spacing.xs },
+  previewRow: { flexDirection: 'row', gap: Spacing.md },
+  previewContainer: { flex: 1 },
+  previewLabel: { fontSize: FontSizes.sm, color: Colors.text.muted, marginBottom: Spacing.xs },
+  videoPreviewBox: { height: 120, backgroundColor: '#000', borderRadius: BorderRadius.md, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
+  thumbnailPreviewBox: { height: 120, backgroundColor: Colors.tertiary, borderRadius: BorderRadius.md, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
+  thumbnailPreviewWrapper: { width: '100%', height: '100%', position: 'relative' },
+  thumbnailPreviewImage: { width: '100%', height: '100%', borderRadius: BorderRadius.md },
+  removeThumbnailBtn: { position: 'absolute', top: Spacing.xs, right: Spacing.xs, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0, 0, 0, 0.6)', justifyContent: 'center', alignItems: 'center' },
+  metaGrid: { flexDirection: 'row', gap: Spacing.sm },
+  metaBox: { flex: 1, backgroundColor: Colors.card, borderRadius: BorderRadius.md, padding: Spacing.md, alignItems: 'center', gap: Spacing.xs },
+  metaBoxLabel: { fontSize: FontSizes.xs, color: Colors.text.muted },
+  metaBoxValue: { fontSize: FontSizes.sm, color: Colors.text.primary, fontWeight: FontWeights.semibold },
   categoriesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   categoryChip: {
     paddingVertical: Spacing.sm,
@@ -678,6 +1077,24 @@ const styles = StyleSheet.create({
   categoryChipActive: { backgroundColor: 'rgba(229, 9, 20, 0.15)', borderColor: Colors.primary },
   categoryChipText: { fontSize: FontSizes.md, color: Colors.text.secondary, fontWeight: FontWeights.medium },
   categoryChipTextActive: { color: Colors.primary },
+  visibilityOptions: { gap: Spacing.sm },
+  visibilityOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.card,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  visibilityOptionActive: { borderColor: Colors.primary, backgroundColor: 'rgba(229, 9, 20, 0.05)' },
+  visibilityTextContainer: { flex: 1 },
+  visibilityLabel: { fontSize: FontSizes.md, color: Colors.text.primary, fontWeight: FontWeights.medium },
+  visibilityLabelActive: { color: Colors.primary },
+  visibilityDesc: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: 2 },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: Colors.border, justifyContent: 'center', alignItems: 'center' },
+  radioActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md, marginBottom: Spacing.md },
   checkbox: { width: 24, height: 24, borderRadius: BorderRadius.sm, borderWidth: 2, borderColor: Colors.border, justifyContent: 'center', alignItems: 'center', marginTop: 2 },
   checkboxActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
@@ -732,5 +1149,6 @@ const styles = StyleSheet.create({
   progressPercent: { fontSize: FontSizes.md, color: Colors.primary, fontWeight: FontWeights.bold },
   progressBar: { height: 8, backgroundColor: Colors.tertiary, borderRadius: BorderRadius.full, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: BorderRadius.full },
-  progressHint: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: Spacing.sm, textAlign: 'center' },
+  progressInfoRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.sm },
+  progressInfo: { fontSize: FontSizes.sm, color: Colors.text.muted },
 });
