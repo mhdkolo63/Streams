@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  Image,
   Dimensions,
   RefreshControl,
   Platform,
@@ -17,6 +16,7 @@ import { supabase, Video, Category } from '@/lib/supabase';
 import { VideoCard } from '@/components/VideoCard';
 import { VideoCardSkeleton } from '@/components/Skeleton';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = width > 768 ? 4 : width > 480 ? 3 : 2;
@@ -57,6 +57,8 @@ export default function CategoryScreen() {
         .eq('category_id', catData.id)
         .limit(100);
 
+      // Server-side filter would be ideal but junction doesn't support filtering on joined table
+      // So we filter client-side (already limited to 100)
       const categoryVideos = junctionData
         ?.filter((v) => v.videos && !Array.isArray(v.videos))
         .map((v) => v.videos as unknown as Video)
@@ -80,7 +82,7 @@ export default function CategoryScreen() {
     setRefreshing(false);
   }, [fetchData]);
 
-  const sortedVideos = (() => {
+  const sortedVideos = useMemo(() => {
     const sorted = [...videos];
     switch (sortBy) {
       case 'newest':
@@ -97,7 +99,7 @@ export default function CategoryScreen() {
         break;
     }
     return sorted;
-  })();
+  }, [videos, sortBy]);
 
   const handleVideoPress = useCallback((video: Video) => {
     router.push(`/video/${video.id}`);

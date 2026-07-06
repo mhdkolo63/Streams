@@ -1,4 +1,4 @@
-import React, { memo, useRef, useCallback, useState, useEffect } from 'react';
+import React, { memo, useRef, useCallback, useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity, Platform, NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { ChevronRight, ChevronLeft, TrendingUp, Flame, Star, Sparkles, Film, Clock, Heart, Play } from 'lucide-react-native';
@@ -55,6 +55,15 @@ function VideoRowComponent({
   }, []);
 
   const scrollOffsetRef = useRef(0);
+  const initialCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cardWidth = useMemo(() => {
+    if (size === 'small') return Math.min(width * 0.3, 160);
+    if (size === 'large') return Math.min(width - 48, 400);
+    return Math.min(width * 0.4, 240);
+  }, [size]);
+
+  const visibleCount = useMemo(() => Math.floor(width / (cardWidth + Spacing.md)), [cardWidth]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -65,30 +74,26 @@ function VideoRowComponent({
   useEffect(() => {
     // Check initial scroll state after data loads
     if (videos.length > 0 && !loading) {
-      setTimeout(() => {
+      if (initialCheckTimerRef.current) clearTimeout(initialCheckTimerRef.current);
+      initialCheckTimerRef.current = setTimeout(() => {
         if (listRef.current) {
           // @ts-ignore - getScrollResponder is available on FlatList
           listRef.current?.getScrollResponder()?.scrollTo?.({ x: 0, y: 0, animated: false });
         }
-        setCanScrollRight(videos.length > getVisibleCount());
+        setCanScrollRight(videos.length > visibleCount);
         setCanScrollLeft(false);
       }, 100);
     }
-  }, [videos, loading]);
-
-  const getVisibleCount = () => {
-    const cardWidth = size === 'small' ? Math.min(width * 0.3, 160) : size === 'large' ? Math.min(width - 48, 400) : Math.min(width * 0.4, 240);
-    return Math.floor(width / (cardWidth + Spacing.md));
-  };
+    return () => { if (initialCheckTimerRef.current) clearTimeout(initialCheckTimerRef.current); };
+  }, [videos, loading, visibleCount]);
 
   const scrollByAmount = useCallback((direction: 'left' | 'right') => {
     if (!listRef.current) return;
-    const cardWidth = size === 'small' ? Math.min(width * 0.3, 160) : size === 'large' ? Math.min(width - 48, 400) : Math.min(width * 0.4, 240);
     const scrollAmount = (cardWidth + Spacing.md) * 3;
     const currentOffset = scrollOffsetRef.current;
     const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
     listRef.current?.scrollToOffset({ offset: newOffset, animated: true });
-  }, [size]);
+  }, [cardWidth]);
 
   // Mouse wheel horizontal scroll on web
   const handleWheel = useCallback((e: any) => {

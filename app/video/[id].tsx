@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  Image,
   TouchableOpacity,
   Dimensions,
   ActivityIndicator,
@@ -28,7 +27,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { VideoRow } from '@/components/VideoRow';
 import { Button } from '@/components/Button';
 import { LoadingScreen } from '@/components/Loading';
+import { CachedImage } from '@/components/CachedImage';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 
 const { width, height } = Dimensions.get('window');
 
@@ -50,7 +51,7 @@ export default function VideoDetailScreen() {
     if (!id) return;
 
     try {
-      // Fetch video
+      // Fetch video first
       const { data: videoData, error: videoError } = await supabase
         .from('videos')
         .select('*')
@@ -65,55 +66,34 @@ export default function VideoDetailScreen() {
 
       setVideo(videoData);
 
-      // Fetch categories
-      const { data: categoryData } = await supabase
-        .from('video_categories')
-        .select('categories(*)')
-        .eq('video_id', id);
+      // Parallelize all secondary queries
+      const [categoryRes, relatedRes, historyRes, favoriteRes] = await Promise.all([
+        supabase.from('video_categories').select('categories(*)').eq('video_id', id),
+        videoData.genre
+          ? supabase.from('videos').select('*').eq('status', 'published').neq('id', id).eq('genre', videoData.genre).limit(10)
+          : Promise.resolve({ data: null }),
+        user
+          ? supabase.from('watch_history').select('progress').eq('video_id', id).eq('user_id', user.id).maybeSingle()
+          : Promise.resolve({ data: null }),
+        user
+          ? supabase.from('favorites').select('id').eq('video_id', id).eq('user_id', user.id).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
 
-      if (categoryData) {
-        const cats = categoryData
+      if (categoryRes.data) {
+        const cats = categoryRes.data
           .filter((c) => c.categories && !Array.isArray(c.categories))
           .map((c) => c.categories as unknown as Category);
         setCategories(cats);
       }
 
-      // Fetch related videos
-      if (videoData.genre) {
-        const { data: related } = await supabase
-          .from('videos')
-          .select('*')
-          .eq('status', 'published')
-          .neq('id', id)
-          .eq('genre', videoData.genre)
-          .limit(10);
+      if (relatedRes.data) setRelatedVideos(relatedRes.data);
 
-        if (related) setRelatedVideos(related);
+      if (historyRes.data && videoData) {
+        setWatchProgress(videoData.duration > 0 ? Math.min(100, (historyRes.data.progress / videoData.duration) * 100) : 0);
       }
 
-      // Fetch watch progress if user is logged in
-      if (user) {
-        const { data: history } = await supabase
-          .from('watch_history')
-          .select('progress')
-          .eq('video_id', id)
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-        if (history && videoData) {
-          setWatchProgress(videoData.duration > 0 ? Math.min(100, (history.progress / videoData.duration) * 100) : 0);
-        }
-
-        // Check if in favorites
-        const { data: favoriteData } = await supabase
-          .from('favorites')
-          .select('id')
-          .eq('video_id', id)
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-        setInFavorites(!!favoriteData);
-      }
+      setInFavorites(!!favoriteRes.data);
 
       // Track view (deduplicate: only count once per hour per user)
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -126,12 +106,14 @@ export default function VideoDetailScreen() {
         .maybeSingle();
 
       if (!existingView) {
-        await supabase.from('video_views').insert({
-          video_id: id,
-          user_id: user?.id || null,
-          watch_duration: 0,
-        });
-        await supabase.rpc('increment_video_views', { video_id: id });
+        await Promise.all([
+          supabase.from('video_views').insert({
+            video_id: id,
+            user_id: user?.id || null,
+            watch_duration: 0,
+          }),
+          supabase.rpc('increment_video_views', { video_id: id }),
+        ]);
       }
     } catch (error) {
       console.error('Error fetching video:', error);
@@ -206,10 +188,9 @@ export default function VideoDetailScreen() {
       />
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.heroContainer}>
-          <Image
-            source={{
-              uri: video.thumbnail_url || 'https://images.unsplash.com/photo-1489594927165-fd5a049b6667?w=800&h=450&fit=crop',
-            }}
+          <CachedImage
+            uri={video.thumbnail_url || 'https://images.unsplash.com/photo-1489594927165-fd5a049b6667?w=800&h=450&fit=crop'}
+            fallbackUri="https://picsum.photos/seed/placeholder/800/450"
             style={styles.heroImage}
             resizeMode="cover"
           />

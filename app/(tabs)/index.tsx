@@ -20,11 +20,12 @@ import {
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, ZoomIn,
 } from 'react-native-reanimated';
-import { supabase, Video } from '@/lib/supabase';
+import { supabase, Video, Category } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { VideoRow } from '@/components/VideoRow';
 import { HeroSkeleton, VideoRowSkeleton } from '@/components/Skeleton';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 import {
   getRecommendedVideos,
   getTrendingVideos,
@@ -119,29 +120,35 @@ export default function HomeScreen() {
         if (favRes.data) setFavoriteIds(new Set(favRes.data.map(f => f.video_id)));
       }
 
-      // Category sections
+      // Category sections - batch query to avoid N+1
       if (categoriesRes.data && categoriesRes.data.length > 0) {
         const cats = categoriesRes.data as { name: string; slug: string }[];
-        const categoryResults = await Promise.all(
-          cats.slice(0, 8).map(async (cat) => {
-            const catIdRes = await supabase.from('categories').select('id').eq('slug', cat.slug).maybeSingle();
-            if (!catIdRes.data) return { name: cat.name, slug: cat.slug, videos: [] };
+        // Single query: fetch all video_categories with video data for all categories at once
+        const { data: allCategoryVideos } = await supabase
+          .from('video_categories')
+          .select('category_id, categories(slug, name), videos(*)')
+          .in('category_id', (await supabase.from('categories').select('id').in('slug', cats.slice(0, 8).map(c => c.slug))).data?.map(c => c.id) || [])
+          .limit(80);
 
-            const { data: junctionData } = await supabase
-              .from('video_categories')
-              .select('videos(*)')
-              .eq('category_id', catIdRes.data.id)
-              .limit(15);
+        // Group by category
+        const catVideoMap = new Map<string, Video[]>();
+        if (allCategoryVideos) {
+          for (const item of allCategoryVideos as any[]) {
+            const catSlug = item.categories?.slug;
+            const video = item.videos as any;
+            if (catSlug && video && !Array.isArray(video) && video.status === 'published') {
+              if (!catVideoMap.has(catSlug)) catVideoMap.set(catSlug, []);
+              catVideoMap.get(catSlug)!.push(video as Video);
+            }
+          }
+        }
 
-            const videos = junctionData
-              ?.filter((v) => v.videos && !Array.isArray(v.videos))
-              .map((v) => v.videos as unknown as Video)
-              .filter(v => v.status === 'published') || [];
-
-            return { name: cat.name, slug: cat.slug, videos: filterUnused(videos).slice(0, 10) };
-          })
-        );
-        const validCats = categoryResults.filter((cv) => cv.videos.length > 0);
+        const categoryResults = cats.slice(0, 8).map(cat => ({
+          name: cat.name,
+          slug: cat.slug,
+          videos: filterUnused(catVideoMap.get(cat.slug) || []).slice(0, 10),
+        }));
+        const validCats = categoryResults.filter(cv => cv.videos.length > 0);
         validCats.forEach(cv => markUsed(cv.videos));
         setCategorySections(validCats);
       }
@@ -203,13 +210,28 @@ export default function HomeScreen() {
     }
   }, [featuredVideos.length]);
 
-  // Realtime: refetch on new published videos
+  // Realtime: refetch on new published videos (debounced to avoid spam)
   useEffect(() => {
+    let updateTimer: ReturnType<typeof setTimeout> | null = null;
+
     const channel = supabase
       .channel('videos-changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'videos', filter: 'status=eq.published' }, () => fetchData())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'videos' }, () => fetchData())
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'videos' }, () => fetchData())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'videos', filter: 'status=eq.published' }, () => {
+        cache.invalidatePrefix('homepage:');
+        fetchData();
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'videos' }, () => {
+        cache.invalidatePrefix('homepage:');
+        fetchData();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'videos' }, () => {
+        // Debounce UPDATE events - only refetch after 2s of no updates
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = setTimeout(() => {
+          cache.invalidatePrefix('homepage:');
+          fetchData();
+        }, 2000);
+      })
       .subscribe();
 
     let notifChannel: ReturnType<typeof supabase.channel> | null = null;
@@ -224,6 +246,7 @@ export default function HomeScreen() {
     }
 
     return () => {
+      if (updateTimer) clearTimeout(updateTimer);
       supabase.removeChannel(channel);
       if (notifChannel) supabase.removeChannel(notifChannel);
     };

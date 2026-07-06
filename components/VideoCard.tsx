@@ -1,5 +1,5 @@
-import React, { memo, useState, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Pressable, Platform } from 'react-native';
+import React, { memo, useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Pressable, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -13,6 +13,7 @@ import Animated, {
 import { Play, Eye, Clock, Film, Calendar, Heart } from 'lucide-react-native';
 import { Colors, BorderRadius, FontSizes, FontWeights, Spacing } from '@/constants/theme';
 import { Video } from '@/lib/supabase';
+import { CachedImage } from '@/components/CachedImage';
 
 const { width } = Dimensions.get('window');
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -42,11 +43,11 @@ function VideoCardComponent({
   const [isFavorite, setIsFavorite] = useState(false);
   const [favAnimating, setFavAnimating] = useState(false);
   const scale = useSharedValue(1);
-  const opacity = useSharedValue(0);
   const overlayOpacity = useSharedValue(0);
   const favScale = useSharedValue(1);
+  const favTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const getCardWidth = () => {
+  const cardWidth = useMemo(() => {
     switch (size) {
       case 'small':
         return Math.min(width * 0.3, 160);
@@ -55,10 +56,19 @@ function VideoCardComponent({
       default:
         return Math.min(width * 0.4, 240);
     }
-  };
+  }, [size]);
 
-  const cardWidth = getCardWidth();
-  const imageHeight = cardWidth / CARD_ASPECT;
+  const imageHeight = useMemo(() => cardWidth / CARD_ASPECT, [cardWidth]);
+
+  const duration = useMemo(() => formatDuration(video.duration), [video.duration]);
+  const uploadDate = useMemo(() =>
+    video.created_at
+      ? new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : '',
+    [video.created_at]
+  );
+  const thumbnailUri = video.thumbnail_url || `https://picsum.photos/seed/${video.id}/640/360`;
+  const viewsText = useMemo(() => formatViews(video.views_count), [video.views_count]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -85,7 +95,7 @@ function VideoCardComponent({
   };
 
   const imageAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
+    opacity: 1,
   }));
 
   const hoverOverlayStyle = useAnimatedStyle(() => ({
@@ -98,7 +108,6 @@ function VideoCardComponent({
 
   const handleImageLoad = useCallback(() => {
     setImageLoaded(true);
-    opacity.value = withTiming(1, { duration: 300 });
   }, []);
 
   const handleFavoritePress = useCallback((e: any) => {
@@ -108,14 +117,13 @@ function VideoCardComponent({
     favScale.value = withSpring(1.4, { damping: 8, stiffness: 200 }, () => {
       favScale.value = withSpring(1, { damping: 12, stiffness: 200 });
     });
-    setTimeout(() => setFavAnimating(false), 600);
+    if (favTimerRef.current) clearTimeout(favTimerRef.current);
+    favTimerRef.current = setTimeout(() => setFavAnimating(false), 600);
   }, []);
 
-  const duration = formatDuration(video.duration);
-  const uploadDate = video.created_at
-    ? new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    : '';
-  const thumbnailUri = video.thumbnail_url || `https://picsum.photos/seed/${video.id}/640/360`;
+  useEffect(() => {
+    return () => { if (favTimerRef.current) clearTimeout(favTimerRef.current); };
+  }, []);
 
   return (
     <Animated.View entering={FadeIn.delay(Math.min(index * 40, 300)).duration(400)}>
@@ -129,12 +137,11 @@ function VideoCardComponent({
         android_ripple={{ color: 'rgba(255,255,255,0.1)', borderless: false }}
       >
         <View style={[styles.thumbnailContainer, { height: imageHeight }]}>
-          {!imageLoaded && <View style={styles.imagePlaceholder} />}
-          <Animated.Image
-            source={{ uri: thumbnailUri }}
-            style={[styles.thumbnail, imageAnimatedStyle]}
+          <CachedImage
+            uri={thumbnailUri}
+            fallbackUri={`https://picsum.photos/seed/${video.id}/640/360`}
+            style={styles.thumbnail}
             resizeMode="cover"
-            onLoad={handleImageLoad}
           />
 
           {/* Always-visible subtle overlay */}
@@ -224,7 +231,7 @@ function VideoCardComponent({
               {video.views_count > 0 && (
                 <View style={styles.metaItem}>
                   <Eye size={11} color={Colors.text.muted} />
-                  <Text style={styles.meta}>{formatViews(video.views_count)} views</Text>
+                  <Text style={styles.meta}>{viewsText} views</Text>
                 </View>
               )}
               {video.duration > 0 && (

@@ -1,4 +1,5 @@
 import { supabase, Video } from './supabase';
+import { cache, CACHE_KEYS, CACHE_TTL } from './cache';
 
 export interface UserPreferences {
   watchedCategoryIds: string[];
@@ -227,6 +228,10 @@ export async function getRecommendedVideos(
 }
 
 export async function getTrendingVideos(limit: number = 15, excludeIds: string[] = []): Promise<TrendingResult> {
+  const cacheKey = `trending:${limit}:${excludeIds.join(',')}`;
+  const cached = cache.get<TrendingResult>(cacheKey);
+  if (cached) return cached;
+
   const excludeSet = new Set(excludeIds);
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -302,10 +307,16 @@ export async function getTrendingVideos(limit: number = 15, excludeIds: string[]
     }
   }
 
-  return { videos: result };
+  const trendingResult = { videos: result };
+  cache.set(cacheKey, trendingResult, CACHE_TTL.medium);
+  return trendingResult;
 }
 
 export async function getMostWatchedVideos(limit: number = 15, excludeIds: string[] = []): Promise<Video[]> {
+  const cacheKey = `most-watched:${limit}:${excludeIds.join(',')}`;
+  const cached = cache.get<Video[]>(cacheKey);
+  if (cached) return cached;
+
   const excludeSet = new Set(excludeIds);
   const { data } = await supabase
     .from('videos')
@@ -313,7 +324,9 @@ export async function getMostWatchedVideos(limit: number = 15, excludeIds: strin
     .eq('status', 'published')
     .order('views_count', { ascending: false })
     .limit(limit * 2);
-  return ((data as Video[]) || []).filter(v => !excludeSet.has(v.id)).slice(0, limit);
+  const result = ((data as Video[]) || []).filter(v => !excludeSet.has(v.id)).slice(0, limit);
+  cache.set(cacheKey, result, CACHE_TTL.medium);
+  return result;
 }
 
 export async function getRelatedVideos(

@@ -24,6 +24,7 @@ import { supabase, Video, Category } from '@/lib/supabase';
 import { VideoCard } from '@/components/VideoCard';
 import { VideoCardSkeleton } from '@/components/Skeleton';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 
 const { width } = Dimensions.get('window');
 const RECENT_SEARCHES_KEY = 'streamflix_recent_searches';
@@ -91,6 +92,11 @@ export default function SearchScreen() {
     fetchInitialData();
     loadRecentSearches();
     fetchTrendingSearches();
+    // Cleanup debounce timers on unmount
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
   }, []);
 
   const fetchInitialData = async () => {
@@ -107,21 +113,34 @@ export default function SearchScreen() {
       if (recentRes.data) setRecentVideos(recentRes.data as Video[]);
       if (featuredRes.data) setFeaturedVideos(featuredRes.data as Video[]);
 
-      // Extract unique genres, languages, release years from all published videos
-      const { data: allVideos } = await supabase.from('videos').select('*').eq('status', 'published');
-      if (allVideos) {
-        allVideosRef.current = allVideos as Video[];
+      // Extract unique genres, languages, release years using targeted queries
+      // instead of fetching ALL published videos
+      const cachedFilters = cache.get<{ genres: string[]; languages: string[]; years: number[] }>(CACHE_KEYS.searchFilters);
+      if (cachedFilters) {
+        setGenres(cachedFilters.genres);
+        setLanguages(cachedFilters.languages);
+        setReleaseYears(cachedFilters.years);
+      } else {
+        const [genresRes, langRes, yearsRes] = await Promise.all([
+          supabase.from('videos').select('genre').eq('status', 'published').not('genre', 'is', null).order('genre'),
+          supabase.from('videos').select('language').eq('status', 'published').not('language', 'is', null).order('language'),
+          supabase.from('videos').select('release_year').eq('status', 'published').not('release_year', 'is', null).order('release_year', { ascending: false }),
+        ]);
         const genreSet = new Set<string>();
         const langSet = new Set<string>();
         const yearSet = new Set<number>();
-        (allVideos as Video[]).forEach(v => {
-          if (v.genre) genreSet.add(v.genre);
-          if (v.language) langSet.add(v.language);
-          if (v.release_year) yearSet.add(v.release_year);
-        });
-        setGenres(Array.from(genreSet).sort());
-        setLanguages(Array.from(langSet).sort());
-        setReleaseYears(Array.from(yearSet).sort((a, b) => b - a));
+        (genresRes.data || []).forEach((v: any) => { if (v.genre) genreSet.add(v.genre); });
+        (langRes.data || []).forEach((v: any) => { if (v.language) langSet.add(v.language); });
+        (yearsRes.data || []).forEach((v: any) => { if (v.release_year) yearSet.add(v.release_year); });
+        const filterData = {
+          genres: Array.from(genreSet).sort(),
+          languages: Array.from(langSet).sort(),
+          years: Array.from(yearSet).sort((a, b) => b - a),
+        };
+        setGenres(filterData.genres);
+        setLanguages(filterData.languages);
+        setReleaseYears(filterData.years);
+        cache.set(CACHE_KEYS.searchFilters, filterData, CACHE_TTL.long);
       }
     } catch (error) {
       console.error('Error fetching initial data:', error);
@@ -242,6 +261,15 @@ export default function SearchScreen() {
 
     searchDebounceRef.current = setTimeout(async () => {
       try {
+        // Check cache first
+        const cacheKey = CACHE_KEYS.searchResults(`${searchQuery.trim()}:${JSON.stringify(currentFilters)}:${currentSort}`);
+        const cached = cache.get<Video[]>(cacheKey);
+        if (cached) {
+          setResults(cached);
+          setLoading(false);
+          return;
+        }
+
         let dbQuery = supabase.from('videos').select('*').eq('status', 'published');
 
         // Text search across multiple fields
@@ -337,6 +365,10 @@ export default function SearchScreen() {
         }
 
         setResults(videoResults);
+        // Cache the search results
+        if (searchQuery.trim()) {
+          cache.set(cacheKey, videoResults, CACHE_TTL.medium);
+        }
       } catch (error) {
         console.error('Error searching:', error);
       } finally {

@@ -5,9 +5,7 @@ import Animated, {
   useSharedValue,
   withRepeat,
   withTiming,
-  withDelay,
   Easing,
-  withSequence,
 } from 'react-native-reanimated';
 import { Colors, BorderRadius, Spacing } from '@/constants/theme';
 
@@ -25,10 +23,7 @@ export function Skeleton({ width = '100%', height = 20, borderRadius = BorderRad
 
   React.useEffect(() => {
     opacity.value = withRepeat(
-      withTiming(0.7, {
-        duration: 800,
-        easing: Easing.inOut(Easing.ease),
-      }),
+      withTiming(0.7, { duration: 1000, easing: Easing.inOut(Easing.ease) }),
       -1,
       true
     );

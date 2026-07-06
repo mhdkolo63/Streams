@@ -18,6 +18,7 @@ import {
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { CachedImage } from '@/components/CachedImage';
 import {
   Play,
   Pause,
@@ -679,8 +680,26 @@ export default function VideoPlayerScreen() {
               isLooping={false}
               useNativeControls={false}
               volume={volume}
+              // Preload only metadata for faster startup
+              progressUpdateIntervalMillis={250}
             />
           </View>
+
+          {/* Poster image shown before video starts playing */}
+          {!isPlaying && !buffering && videoData?.thumbnail_url && (
+            <View style={styles.posterOverlay} pointerEvents="none">
+              <CachedImage
+                uri={videoData.thumbnail_url}
+                fallbackUri={`https://picsum.photos/seed/${videoData.id}/1280/720`}
+                style={styles.posterImage}
+                resizeMode="cover"
+                blurRadius={2}
+              />
+              <View style={styles.posterPlayButton}>
+                <Play size={48} color={Colors.text.primary} fill={Colors.text.primary} />
+              </View>
+            </View>
+          )}
 
           {buffering && !playbackError && (
             <View style={styles.bufferingOverlay} pointerEvents="none">
@@ -1098,6 +1117,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  posterOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.background,
+  },
+  posterImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  posterPlayButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(229, 9, 20, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   playbackErrorOverlay: {
     ...StyleSheet.absoluteFillObject,

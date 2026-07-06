@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { Platform } from 'react-native';
 import { supabase, Profile, Notification, VideoLike, type User } from '@/lib/supabase';
+import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 
 interface AuthContextType {
   user: User | null;
@@ -31,6 +32,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const initialized = useRef(false);
 
   const fetchProfile = useCallback(async (userId: string): Promise<Profile | null> => {
+    const cached = cache.get<Profile>(CACHE_KEYS.profile(userId));
+    if (cached) return cached;
+
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -43,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
 
+      if (data) cache.set(CACHE_KEYS.profile(userId), data as Profile, CACHE_TTL.long);
       return data as Profile;
     } catch (error) {
       console.error('Error fetching profile:', error);
@@ -110,7 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [fetchProfile]);
 
-  const checkUsernameExists = async (username: string): Promise<boolean> => {
+  const checkUsernameExists = useCallback(async (username: string): Promise<boolean> => {
     try {
       const { data } = await supabase
         .from('profiles')
@@ -122,9 +127,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-  };
+  }, [user]);
 
-  const checkPhoneExists = async (phone: string): Promise<boolean> => {
+  const checkPhoneExists = useCallback(async (phone: string): Promise<boolean> => {
     try {
       const { data } = await supabase
         .from('profiles')
@@ -136,9 +141,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-  };
+  }, [user]);
 
-  const checkEmailExists = async (email: string): Promise<boolean> => {
+  const checkEmailExists = useCallback(async (email: string): Promise<boolean> => {
     try {
       const { data } = await supabase
         .from('profiles')
@@ -150,9 +155,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-  };
+  }, [user]);
 
-  const signUp = async (email: string, password: string, fullName?: string, phone?: string, username?: string) => {
+  const signUp = useCallback(async (email: string, password: string, fullName?: string, phone?: string, username?: string) => {
     try {
       const { error } = await supabase.auth.signUp({
         email,
@@ -169,9 +174,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, []);
 
-  const signIn = async (identifier: string, password: string) => {
+  const signIn = useCallback(async (identifier: string, password: string) => {
     try {
       const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
       let emailToUse = identifier;
@@ -197,9 +202,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, []);
 
-  const signInAsAdmin = async (email: string, password: string) => {
+  const signInAsAdmin = useCallback(async (email: string, password: string) => {
     try {
       setLoading(true);
 
@@ -239,9 +244,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       return { error: error as Error, isAdmin: false };
     }
-  };
+  }, [fetchProfile]);
 
-  const resetPassword = async (email: string) => {
+  const resetPassword = useCallback(async (email: string) => {
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/auth/reset-password` : undefined,
@@ -250,9 +255,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, []);
 
-  const updatePassword = async (newPassword: string) => {
+  const updatePassword = useCallback(async (newPassword: string) => {
     try {
       const { error } = await supabase.auth.updateUser({
         password: newPassword,
@@ -261,9 +266,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, []);
 
-  const changePassword = async (currentPassword: string, newPassword: string) => {
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
     try {
       if (!user?.email) {
         return { error: new Error('No user logged in') as Error };
@@ -290,9 +295,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, [user]);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut({ scope: 'global' });
     } catch (error) {
@@ -302,6 +307,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setProfile(null);
     setIsAdmin(false);
+    cache.clear();
 
     if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
       try {
@@ -317,18 +323,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // localStorage may not be available
       }
     }
+  }, []);
 
-    try {
-      const { error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || (await supabase.auth.getSession()).data.session) {
-        await supabase.auth.signOut({ scope: 'local' });
-      }
-    } catch (e) {
-      // ignore
-    }
-  };
-
-  const updateProfile = async (updates: Partial<Profile>) => {
+  const updateProfile = useCallback(async (updates: Partial<Profile>) => {
     if (!user) return { error: new Error('Not authenticated') };
 
     try {
@@ -340,33 +337,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) throw error;
 
       setProfile(prev => prev ? { ...prev, ...updates } : null);
+      cache.set(CACHE_KEYS.profile(user.id), { ...profile, ...updates } as Profile, CACHE_TTL.long);
       return { error: null };
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, [user, profile]);
+
+  const contextValue = useMemo(() => ({
+    user,
+    profile,
+    isAdmin,
+    loading,
+    signUp,
+    signIn,
+    signInAsAdmin,
+    signOut,
+    resetPassword,
+    updatePassword,
+    changePassword,
+    updateProfile,
+    refreshProfile,
+    checkUsernameExists,
+    checkPhoneExists,
+    checkEmailExists,
+  }), [
+    user, profile, isAdmin, loading,
+    signUp, signIn, signInAsAdmin, signOut, resetPassword,
+    updatePassword, changePassword, updateProfile, refreshProfile,
+    checkUsernameExists, checkPhoneExists, checkEmailExists,
+  ]);
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        isAdmin,
-        loading,
-        signUp,
-        signIn,
-        signInAsAdmin,
-        signOut,
-        resetPassword,
-        updatePassword,
-        changePassword,
-        updateProfile,
-        refreshProfile,
-        checkUsernameExists,
-        checkPhoneExists,
-        checkEmailExists,
-      }}
-    >
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

@@ -4,18 +4,21 @@ import { StatusBar } from 'expo-status-bar';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { ToastProvider } from '@/components/Toast';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 export default function RootLayout() {
   useFrameworkReady();
 
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="+not-found" />
-        </Stack>
-        <StatusBar style="light" />
-      </ToastProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <ToastProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="+not-found" />
+          </Stack>
+          <StatusBar style="light" />
+        </ToastProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

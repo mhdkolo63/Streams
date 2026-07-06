@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, createContext, useContext } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import Animated, {
   FadeIn,
@@ -166,8 +166,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     setToasts([]);
   }, []);
 
+  const contextValue = useMemo(() => ({ show, success, error, warning, info, dismiss, dismissAll }), [show, success, error, warning, info, dismiss, dismissAll]);
+
   return (
-    <ToastContext.Provider value={{ show, success, error, warning, info, dismiss, dismissAll }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       {toasts.length > 0 && (
         <View style={styles.container} pointerEvents="box-none">

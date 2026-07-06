@@ -15,7 +15,17 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "assets/images/favicon.png",
+      "name": "StreamFlix",
+      "shortName": "StreamFlix",
+      "backgroundColor": "#0B0B0B",
+      "themeColor": "#E50914",
+      "description": "Stream your favorite movies and TV shows in stunning quality.",
+      "lang": "en",
+      "startUrl": "/",
+      "orientation": "default",
+      "display": "standalone",
+      "preferRelatedApplications": false
     },
     "plugins": [
       "expo-router",
