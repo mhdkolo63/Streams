@@ -1,7 +1,7 @@
-import React, { memo } from 'react';
-import { View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity } from 'react-native';
+import React, { memo, useRef, useCallback, useState, useEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, Dimensions, TouchableOpacity, Platform, NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { ChevronRight, TrendingUp, Flame, Star, Sparkles, Film, Clock, Heart } from 'lucide-react-native';
+import { ChevronRight, ChevronLeft, TrendingUp, Flame, Star, Sparkles, Film, Clock, Heart, Play } from 'lucide-react-native';
 import { Colors, FontSizes, FontWeights, Spacing, BorderRadius } from '@/constants/theme';
 import { Video } from '@/lib/supabase';
 import { VideoCard } from './VideoCard';
@@ -19,17 +19,8 @@ interface VideoRowProps {
   progressMap?: Record<string, number>;
   size?: 'small' | 'medium' | 'large';
   icon?: typeof TrendingUp;
+  emptyMessage?: string;
 }
-
-const iconMap: Record<string, any> = {
-  TrendingUp,
-  Flame,
-  Star,
-  Sparkles,
-  Film,
-  Clock,
-  Heart,
-};
 
 function VideoRowComponent({
   title,
@@ -40,14 +31,74 @@ function VideoRowComponent({
   progressMap,
   size = 'medium',
   icon,
+  emptyMessage,
 }: VideoRowProps) {
   const router = useRouter();
+  const listRef = useRef<FlatList<Video>>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
 
-  const handleVideoPress = (video: Video) => {
+  const handleVideoPress = useCallback((video: Video) => {
     router.push(`/video/${video.id}`);
-  };
+  }, [router]);
 
   const IconComponent = icon;
+
+  const checkScrollButtons = useCallback((offset: number, contentWidth: number, layoutWidth: number) => {
+    if (contentWidth <= layoutWidth) {
+      setCanScrollLeft(false);
+      setCanScrollRight(false);
+      return;
+    }
+    setCanScrollLeft(offset > 8);
+    setCanScrollRight(offset < contentWidth - layoutWidth - 8);
+  }, []);
+
+  const scrollOffsetRef = useRef(0);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollOffsetRef.current = contentOffset.x;
+    checkScrollButtons(contentOffset.x, contentSize.width, layoutMeasurement.width);
+  }, [checkScrollButtons]);
+
+  useEffect(() => {
+    // Check initial scroll state after data loads
+    if (videos.length > 0 && !loading) {
+      setTimeout(() => {
+        if (listRef.current) {
+          // @ts-ignore - getScrollResponder is available on FlatList
+          listRef.current?.getScrollResponder()?.scrollTo?.({ x: 0, y: 0, animated: false });
+        }
+        setCanScrollRight(videos.length > getVisibleCount());
+        setCanScrollLeft(false);
+      }, 100);
+    }
+  }, [videos, loading]);
+
+  const getVisibleCount = () => {
+    const cardWidth = size === 'small' ? Math.min(width * 0.3, 160) : size === 'large' ? Math.min(width - 48, 400) : Math.min(width * 0.4, 240);
+    return Math.floor(width / (cardWidth + Spacing.md));
+  };
+
+  const scrollByAmount = useCallback((direction: 'left' | 'right') => {
+    if (!listRef.current) return;
+    const cardWidth = size === 'small' ? Math.min(width * 0.3, 160) : size === 'large' ? Math.min(width - 48, 400) : Math.min(width * 0.4, 240);
+    const scrollAmount = (cardWidth + Spacing.md) * 3;
+    const currentOffset = scrollOffsetRef.current;
+    const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
+    listRef.current?.scrollToOffset({ offset: newOffset, animated: true });
+  }, [size]);
+
+  // Mouse wheel horizontal scroll on web
+  const handleWheel = useCallback((e: any) => {
+    if (Platform.OS !== 'web') return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      const direction = e.deltaY > 0 ? 'right' : 'left';
+      scrollByAmount(direction);
+    }
+  }, [scrollByAmount]);
 
   if (loading) {
     return (
@@ -65,12 +116,33 @@ function VideoRowComponent({
           renderItem={() => <VideoCardSkeleton size={size} />}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.list}
+          scrollEnabled={false}
         />
       </Animated.View>
     );
   }
 
   if (videos.length === 0) {
+    if (emptyMessage) {
+      return (
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.container}>
+          <View style={styles.header}>
+            <View style={styles.titleRow}>
+              {IconComponent && (
+                <View style={styles.iconContainer}>
+                  <IconComponent size={18} color={Colors.primary} />
+                </View>
+              )}
+              <Text style={styles.title}>{title}</Text>
+            </View>
+          </View>
+          <View style={styles.emptyState}>
+            <Play size={32} color={Colors.text.muted} />
+            <Text style={styles.emptyText}>{emptyMessage}</Text>
+          </View>
+        </Animated.View>
+      );
+    }
     return null;
   }
 
@@ -93,26 +165,53 @@ function VideoRowComponent({
           </TouchableOpacity>
         )}
       </View>
-      <FlatList
-        horizontal
-        data={videos}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item, index }) => (
-          <Animated.View entering={FadeIn.delay(index * 50).duration(300)}>
+
+      <View style={styles.scrollContainer}>
+        {/* Left arrow */}
+        {canScrollLeft && Platform.OS === 'web' && (
+          <TouchableOpacity
+            style={[styles.scrollArrow, styles.scrollArrowLeft]}
+            onPress={() => scrollByAmount('left')}
+            activeOpacity={0.8}
+          >
+            <ChevronLeft size={24} color={Colors.text.primary} />
+          </TouchableOpacity>
+        )}
+
+        <FlatList
+          ref={listRef}
+          horizontal
+          data={videos}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item, index }) => (
             <VideoCard
               video={item}
               onPress={() => handleVideoPress(item)}
               size={size}
               showProgress={showProgress}
               progress={progressMap?.[item.id]}
+              index={index}
             />
-          </Animated.View>
+          )}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.list}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          decelerationRate="fast"
+          {...(Platform.OS === 'web' ? { onScrollToOverflow: handleWheel as any } : {})}
+        />
+
+        {/* Right arrow */}
+        {canScrollRight && Platform.OS === 'web' && (
+          <TouchableOpacity
+            style={[styles.scrollArrow, styles.scrollArrowRight]}
+            onPress={() => scrollByAmount('right')}
+            activeOpacity={0.8}
+          >
+            <ChevronRight size={24} color={Colors.text.primary} />
+          </TouchableOpacity>
         )}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.list}
-        snapToInterval={size === 'small' ? width * 0.32 : size === 'large' ? width - 32 : width * 0.42}
-        decelerationRate="fast"
-      />
+      </View>
     </Animated.View>
   );
 }
@@ -170,6 +269,29 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: Spacing.lg,
   },
+  scrollContainer: {
+    position: 'relative',
+  },
+  scrollArrow: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -24,
+    width: 40,
+    height: 48,
+    backgroundColor: 'rgba(11, 11, 11, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: BorderRadius.md,
+    zIndex: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  scrollArrowLeft: {
+    left: 0,
+  },
+  scrollArrowRight: {
+    right: 0,
+  },
   skeletonIcon: {
     width: 28,
     height: 28,
@@ -181,5 +303,16 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: BorderRadius.sm,
     backgroundColor: Colors.tertiary,
+  },
+  emptyState: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xl,
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  emptyText: {
+    color: Colors.text.muted,
+    fontSize: FontSizes.md,
+    textAlign: 'center',
   },
 });

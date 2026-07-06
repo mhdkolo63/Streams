@@ -45,6 +45,7 @@ import Animated, {
   SlideInUp,
 } from 'react-native-reanimated';
 import { supabase, Video as VideoType } from '@/lib/supabase';
+import { getRelatedVideos } from '@/lib/recommendations';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
@@ -225,32 +226,8 @@ export default function VideoPlayerScreen() {
         setInFavorites(!!favRes.data);
       }
 
-      let relatedQuery = supabase
-        .from('videos')
-        .select('*')
-        .eq('status', 'published')
-        .neq('id', id)
-        .limit(10);
-
-      if (vData.genre) {
-        relatedQuery = relatedQuery.eq('genre', vData.genre);
-      } else {
-        relatedQuery = relatedQuery.order('created_at', { ascending: false });
-      }
-
-      const { data: related } = await relatedQuery;
-      if (related && related.length > 0) {
-        setRelatedVideos(related);
-      } else {
-        const { data: fallback } = await supabase
-          .from('videos')
-          .select('*')
-          .eq('status', 'published')
-          .neq('id', id)
-          .order('views_count', { ascending: false })
-          .limit(10);
-        if (fallback) setRelatedVideos(fallback);
-      }
+      const relatedResult = await getRelatedVideos(vData as VideoType, 10);
+      setRelatedVideos(relatedResult.videos);
 
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const { data: existingView } = await supabase

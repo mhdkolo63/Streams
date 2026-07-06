@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useState, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Pressable, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -8,13 +8,16 @@ import Animated, {
   interpolate,
   FadeIn,
   ZoomIn,
+  FadeOut,
 } from 'react-native-reanimated';
-import { Play, Eye, Clock, Film, Calendar } from 'lucide-react-native';
+import { Play, Eye, Clock, Film, Calendar, Heart } from 'lucide-react-native';
 import { Colors, BorderRadius, FontSizes, FontWeights, Spacing } from '@/constants/theme';
 import { Video } from '@/lib/supabase';
 
 const { width } = Dimensions.get('window');
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+const CARD_ASPECT = 16 / 9;
 
 interface VideoCardProps {
   video: Video;
@@ -23,6 +26,7 @@ interface VideoCardProps {
   showProgress?: boolean;
   progress?: number;
   showDetails?: boolean;
+  index?: number;
 }
 
 function VideoCardComponent({
@@ -32,34 +36,29 @@ function VideoCardComponent({
   showProgress,
   progress,
   showDetails = true,
+  index = 0,
 }: VideoCardProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
-  const [hovered, setHovered] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favAnimating, setFavAnimating] = useState(false);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0);
   const overlayOpacity = useSharedValue(0);
+  const favScale = useSharedValue(1);
 
   const getCardWidth = () => {
     switch (size) {
       case 'small':
-        return width * 0.32;
+        return Math.min(width * 0.3, 160);
       case 'large':
-        return width - Spacing.lg * 2;
+        return Math.min(width - Spacing.lg * 2, 400);
       default:
-        return width * 0.42;
+        return Math.min(width * 0.4, 240);
     }
   };
 
-  const getImageHeight = () => {
-    switch (size) {
-      case 'small':
-        return width * 0.19;
-      case 'large':
-        return width * 0.5;
-      default:
-        return width * 0.26;
-    }
-  };
+  const cardWidth = getCardWidth();
+  const imageHeight = cardWidth / CARD_ASPECT;
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -75,14 +74,12 @@ function VideoCardComponent({
 
   const handleHoverIn = () => {
     if (Platform.OS === 'web') {
-      setHovered(true);
       overlayOpacity.value = withTiming(1, { duration: 200 });
     }
   };
 
   const handleHoverOut = () => {
     if (Platform.OS === 'web') {
-      setHovered(false);
       overlayOpacity.value = withTiming(0, { duration: 200 });
     }
   };
@@ -95,113 +92,155 @@ function VideoCardComponent({
     opacity: overlayOpacity.value,
   }));
 
-  const handleImageLoad = () => {
+  const favAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: favScale.value }],
+  }));
+
+  const handleImageLoad = useCallback(() => {
     setImageLoaded(true);
     opacity.value = withTiming(1, { duration: 300 });
-  };
+  }, []);
+
+  const handleFavoritePress = useCallback((e: any) => {
+    if (e?.stopPropagation) e.stopPropagation();
+    setIsFavorite(prev => !prev);
+    setFavAnimating(true);
+    favScale.value = withSpring(1.4, { damping: 8, stiffness: 200 }, () => {
+      favScale.value = withSpring(1, { damping: 12, stiffness: 200 });
+    });
+    setTimeout(() => setFavAnimating(false), 600);
+  }, []);
 
   const duration = formatDuration(video.duration);
   const uploadDate = video.created_at
-    ? new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    ? new Date(video.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : '';
   const thumbnailUri = video.thumbnail_url || `https://picsum.photos/seed/${video.id}/640/360`;
 
   return (
-    <AnimatedPressable
-      onPress={onPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      onHoverIn={handleHoverIn}
-      onHoverOut={handleHoverOut}
-      style={[styles.container, { width: getCardWidth() }, animatedStyle]}
-      android_ripple={{ color: 'rgba(255,255,255,0.1)', borderless: false }}
-    >
-      <View style={[styles.thumbnailContainer, { height: getImageHeight() }]}>
-        {!imageLoaded && <View style={styles.imagePlaceholder} />}
-        <Animated.Image
-          source={{ uri: thumbnailUri }}
-          style={[styles.thumbnail, imageAnimatedStyle]}
-          resizeMode="cover"
-          onLoad={handleImageLoad}
-        />
-        <Animated.View entering={ZoomIn.delay(100).duration(200)} style={styles.overlay}>
-          <View style={styles.playButtonContainer}>
-            <View style={styles.playButton}>
-              <Play size={22} color={Colors.text.primary} fill={Colors.text.primary} />
-            </View>
-          </View>
-        </Animated.View>
+    <Animated.View entering={FadeIn.delay(Math.min(index * 40, 300)).duration(400)}>
+      <AnimatedPressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        onHoverIn={handleHoverIn}
+        onHoverOut={handleHoverOut}
+        style={[styles.container, { width: cardWidth }, animatedStyle]}
+        android_ripple={{ color: 'rgba(255,255,255,0.1)', borderless: false }}
+      >
+        <View style={[styles.thumbnailContainer, { height: imageHeight }]}>
+          {!imageLoaded && <View style={styles.imagePlaceholder} />}
+          <Animated.Image
+            source={{ uri: thumbnailUri }}
+            style={[styles.thumbnail, imageAnimatedStyle]}
+            resizeMode="cover"
+            onLoad={handleImageLoad}
+          />
 
-        {/* Hover overlay for web - shows extra info */}
-        {Platform.OS === 'web' && (
-          <Animated.View style={[styles.hoverOverlay, hoverOverlayStyle]}>
-            <View style={styles.hoverPlayButton}>
-              <Play size={28} color={Colors.text.primary} fill={Colors.text.primary} />
-            </View>
-          </Animated.View>
-        )}
-
-        <Animated.View entering={FadeIn.delay(150).duration(200)} style={styles.durationBadge}>
-          <Text style={styles.durationText}>{duration}</Text>
-        </Animated.View>
-
-        {video.featured && (
-          <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.featuredBadge}>
-            <Text style={styles.featuredText}>Featured</Text>
-          </Animated.View>
-        )}
-
-        {video.trending && !video.featured && (
-          <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.trendingBadge}>
-            <Text style={styles.trendingText}>Trending</Text>
-          </Animated.View>
-        )}
-
-        {showProgress && progress !== undefined && progress > 0 && (
-          <View style={styles.progressContainer}>
-            <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: `${progress}%` }]} />
-            </View>
-          </View>
-        )}
-      </View>
-
-      {showDetails && (
-        <View style={styles.details}>
-          <Text style={styles.title} numberOfLines={2}>
-            {video.title}
-          </Text>
-          <View style={styles.metaRow}>
-            {video.genre && (
-              <View style={styles.metaItem}>
-                <Film size={11} color={Colors.text.muted} />
-                <Text style={styles.meta} numberOfLines={1}>{video.genre}</Text>
+          {/* Always-visible subtle overlay */}
+          <Animated.View entering={ZoomIn.delay(100).duration(200)} style={styles.overlay}>
+            <View style={styles.playButtonContainer}>
+              <View style={styles.playButton}>
+                <Play size={size === 'small' ? 16 : 20} color={Colors.text.primary} fill={Colors.text.primary} />
               </View>
-            )}
-            {video.release_year && (
-              <>
-                {video.genre && <Text style={styles.metaDot}>·</Text>}
-                <Text style={styles.meta}>{video.release_year}</Text>
-              </>
-            )}
-          </View>
-          <View style={styles.metaRow}>
-            {video.views_count > 0 && (
-              <View style={styles.metaItem}>
-                <Eye size={11} color={Colors.text.muted} />
-                <Text style={styles.meta}>{formatViews(video.views_count)} views</Text>
+            </View>
+          </Animated.View>
+
+          {/* Hover overlay for web - shows larger play button + favorite */}
+          {Platform.OS === 'web' && (
+            <Animated.View style={[styles.hoverOverlay, hoverOverlayStyle]} pointerEvents="none">
+              <View style={styles.hoverPlayButton}>
+                <Play size={size === 'small' ? 22 : 28} color={Colors.text.primary} fill={Colors.text.primary} />
               </View>
-            )}
-            {uploadDate && (
-              <>
-                {video.views_count > 0 && <Text style={styles.metaDot}>·</Text>}
-                <Text style={styles.meta}>{uploadDate}</Text>
-            </>
-            )}
-          </View>
+            </Animated.View>
+          )}
+
+          {/* Favorite button - top right */}
+          <TouchableOpacity
+            style={styles.favButton}
+            onPress={handleFavoritePress}
+            activeOpacity={0.8}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Animated.View style={favAnimatedStyle}>
+              <Heart
+                size={16}
+                color={isFavorite ? Colors.primary : Colors.text.primary}
+                fill={isFavorite ? Colors.primary : 'transparent'}
+              />
+            </Animated.View>
+          </TouchableOpacity>
+
+          {/* Duration badge */}
+          <Animated.View entering={FadeIn.delay(150).duration(200)} style={styles.durationBadge}>
+            <Text style={styles.durationText}>{duration}</Text>
+          </Animated.View>
+
+          {/* Featured / Trending badges */}
+          {video.featured && (
+            <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.featuredBadge}>
+              <Text style={styles.featuredText}>Featured</Text>
+            </Animated.View>
+          )}
+          {video.trending && !video.featured && (
+            <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.trendingBadge}>
+              <Text style={styles.trendingText}>Trending</Text>
+            </Animated.View>
+          )}
+
+          {/* Progress bar for Continue Watching */}
+          {showProgress && progress !== undefined && progress > 0 && (
+            <View style={styles.progressContainer}>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${progress}%` }]} />
+              </View>
+            </View>
+          )}
         </View>
-      )}
-    </AnimatedPressable>
+
+        {showDetails && (
+          <View style={styles.details}>
+            <Text style={styles.title} numberOfLines={2}>
+              {video.title}
+            </Text>
+            <View style={styles.metaRow}>
+              {video.genre && (
+                <View style={styles.metaItem}>
+                  <Film size={11} color={Colors.text.muted} />
+                  <Text style={styles.meta} numberOfLines={1}>{video.genre}</Text>
+                </View>
+              )}
+              {uploadDate && (
+                <>
+                  {video.genre && <Text style={styles.metaDot}>·</Text>}
+                  <View style={styles.metaItem}>
+                    <Calendar size={11} color={Colors.text.muted} />
+                    <Text style={styles.meta}>{uploadDate}</Text>
+                  </View>
+                </>
+              )}
+            </View>
+            <View style={styles.metaRow}>
+              {video.views_count > 0 && (
+                <View style={styles.metaItem}>
+                  <Eye size={11} color={Colors.text.muted} />
+                  <Text style={styles.meta}>{formatViews(video.views_count)} views</Text>
+                </View>
+              )}
+              {video.duration > 0 && (
+                <>
+                  {video.views_count > 0 && <Text style={styles.metaDot}>·</Text>}
+                  <View style={styles.metaItem}>
+                    <Clock size={11} color={Colors.text.muted} />
+                    <Text style={styles.meta}>{duration}</Text>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        )}
+      </AnimatedPressable>
+    </Animated.View>
   );
 }
 
@@ -210,8 +249,7 @@ export const VideoCard = memo(VideoCardComponent);
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
+  const secs = Math.floor(seconds % 60);
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
@@ -219,12 +257,8 @@ function formatDuration(seconds: number): string {
 }
 
 function formatViews(views: number): string {
-  if (views >= 1000000) {
-    return `${(views / 1000000).toFixed(1)}M`;
-  }
-  if (views >= 1000) {
-    return `${(views / 1000).toFixed(1)}K`;
-  }
+  if (views >= 1000000) return `${(views / 1000000).toFixed(1)}M`;
+  if (views >= 1000) return `${(views / 1000).toFixed(1)}K`;
   return views.toString();
 }
 
@@ -248,7 +282,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -266,27 +300,44 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingLeft: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
   playButtonContainer: {
-    opacity: 0.9,
+    opacity: 0.85,
   },
   playButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.6)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  favButton: {
+    position: 'absolute',
+    top: Spacing.xs,
+    right: Spacing.xs,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
   },
   durationBadge: {
     position: 'absolute',
-    bottom: Spacing.sm,
-    right: Spacing.sm,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    bottom: Spacing.xs,
+    right: Spacing.xs,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: BorderRadius.sm,
   },
   durationText: {
@@ -296,11 +347,11 @@ const styles = StyleSheet.create({
   },
   featuredBadge: {
     position: 'absolute',
-    top: Spacing.sm,
-    left: Spacing.sm,
+    top: Spacing.xs,
+    left: Spacing.xs,
     backgroundColor: 'rgba(229, 9, 20, 0.95)',
     paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: BorderRadius.sm,
   },
   featuredText: {
@@ -310,11 +361,11 @@ const styles = StyleSheet.create({
   },
   trendingBadge: {
     position: 'absolute',
-    top: Spacing.sm,
-    left: Spacing.sm,
+    top: Spacing.xs,
+    left: Spacing.xs,
     backgroundColor: 'rgba(59, 130, 246, 0.95)',
     paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: BorderRadius.sm,
   },
   trendingText: {
@@ -330,7 +381,7 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   progressBar: {
-    height: 4,
+    height: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: BorderRadius.full,
     overflow: 'hidden',
@@ -355,6 +406,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 2,
+    flexWrap: 'wrap',
   },
   metaItem: {
     flexDirection: 'row',
