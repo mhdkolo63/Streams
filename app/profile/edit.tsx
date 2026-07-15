@@ -14,14 +14,17 @@ import { useRouter, Stack } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { ArrowLeft, Camera, Trash2, User, Mail, Phone, AtSign, Check } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { VALIDATION, sanitizeString, sanitizeFilename } from '@/lib/validation';
 
 export default function EditProfileScreen() {
   const router = useRouter();
   const { user, profile, updateProfile, refreshProfile, checkUsernameExists, checkPhoneExists, checkEmailExists } = useAuth();
+  useAuthGuard(true);
 
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [username, setUsername] = useState(profile?.username || '');
@@ -63,8 +66,15 @@ export default function EditProfileScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setAvatarFile(result.assets[0]);
-        setAvatarUrl(result.assets[0].uri);
+        const asset = result.assets[0];
+        // Validate file type and size
+        const fileCheck = VALIDATION.imageFile({ name: asset.fileName || 'avatar.jpg', type: asset.mimeType, size: asset.fileSize });
+        if (!fileCheck.valid) {
+          Alert.alert('Invalid file', fileCheck.message || 'Please select a valid image file.');
+          return;
+        }
+        setAvatarFile(asset);
+        setAvatarUrl(asset.uri);
         setAvatarRemoved(false);
       }
     } catch (err) {
@@ -85,7 +95,8 @@ export default function EditProfileScreen() {
     try {
       const fileExt = (avatarFile.uri.split('.').pop() || 'jpg').toLowerCase();
       const contentType = fileExt === 'png' ? 'image/png' : fileExt === 'webp' ? 'image/webp' : fileExt === 'gif' ? 'image/gif' : 'image/jpeg';
-      const fileName = `${user.id}_${Date.now()}.${fileExt}`;
+      const safeExt = sanitizeFilename(fileExt);
+      const fileName = `${user.id}/${user.id}_${Date.now()}.${safeExt}`;
       const filePath = `${fileName}`;
 
       const response = await fetch(avatarFile.uri);
@@ -174,8 +185,8 @@ export default function EditProfileScreen() {
 
     try {
       const updates: any = {
-        full_name: fullName.trim(),
-        username: username.trim() || null,
+        full_name: sanitizeString(fullName, 50),
+        username: sanitizeString(username, 20) || null,
         phone: phone.trim() || null,
       };
 

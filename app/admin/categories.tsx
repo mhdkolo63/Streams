@@ -16,6 +16,7 @@ import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { LoadingScreen } from '@/components/Loading';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { VALIDATION, sanitizeString } from '@/lib/validation';
 
 export default function ManageCategoriesScreen() {
   const router = useRouter();
@@ -103,12 +104,16 @@ export default function ManageCategoriesScreen() {
 
   const saveCategory = async () => {
     if (!formName.trim()) { toast.error('Validation failed', 'Category name is required'); return; }
+    if (formName.trim().length > 50) { toast.error('Validation failed', 'Category name must be 50 characters or less'); return; }
     setSaving(true);
     try {
       const slug = formName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      if (!slug) { toast.error('Validation failed', 'Invalid category name'); setSaving(false); return; }
       let imageUrl = editingCategory?.image_url || null;
 
       if (formImage) {
+        const imgCheck = VALIDATION.imageFile({ name: formImage.fileName || 'image.jpg', type: formImage.mimeType, size: formImage.fileSize });
+        if (!imgCheck.valid) { toast.error('Invalid image', imgCheck.message || 'Please select a valid image'); setSaving(false); return; }
         const ext = formImage.uri.startsWith('data:') ? 'jpg' : (formImage.uri.split('.').pop() || 'jpg');
         const name = `category-images/${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
         const blob = await (await fetch(formImage.uri)).blob();
@@ -118,18 +123,18 @@ export default function ManageCategoriesScreen() {
 
       if (editingCategory) {
         const { error } = await supabase.from('categories').update({
-          name: formName.trim(), description: formDescription.trim() || null,
-          image_url: imageUrl, icon_name: formIconName, updated_at: new Date().toISOString(),
+          name: sanitizeString(formName, 50), description: formDescription.trim() ? sanitizeString(formDescription, 500) : null,
+          image_url: imageUrl, icon_name: sanitizeString(formIconName, 50), updated_at: new Date().toISOString(),
         }).eq('id', editingCategory.id);
         if (error) throw error;
-        setCategories(prev => prev.map(c => c.id === editingCategory.id ? { ...c, name: formName.trim(), description: formDescription.trim() || null, image_url: imageUrl, icon_name: formIconName } : c));
+        setCategories(prev => prev.map(c => c.id === editingCategory.id ? { ...c, name: sanitizeString(formName, 50), description: formDescription.trim() ? sanitizeString(formDescription, 500) || null : null, image_url: imageUrl, icon_name: sanitizeString(formIconName, 50) } : c));
         toast.success('Category updated', 'Changes saved successfully');
         await logAdminAction('edit_category', `Edited category: ${formName}`);
       } else {
         const maxSort = Math.max(0, ...categories.map(c => c.sort_order || 0));
         const { data, error } = await supabase.from('categories').insert({
-          name: formName.trim(), slug, description: formDescription.trim() || null,
-          image_url: imageUrl, icon_name: formIconName, sort_order: maxSort + 1,
+          name: sanitizeString(formName, 50), slug, description: formDescription.trim() ? sanitizeString(formDescription, 500) : null,
+          image_url: imageUrl, icon_name: sanitizeString(formIconName, 50), sort_order: maxSort + 1,
         }).select().single();
         if (error) throw error;
         if (data) setCategories(prev => [...prev, data as Category]);

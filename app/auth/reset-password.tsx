@@ -17,6 +17,7 @@ import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { VALIDATION } from '@/lib/validation';
 
 const { width, height } = Dimensions.get('window');
 
@@ -33,6 +34,7 @@ export default function ResetPasswordScreen() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isValidSession, setIsValidSession] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false);
 
   useEffect(() => {
     // Check if we have a valid session from the reset link
@@ -56,8 +58,9 @@ export default function ResetPasswordScreen() {
       return false;
     }
 
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters');
+    const pwCheck = VALIDATION.password(newPassword);
+    if (!pwCheck.valid) {
+      setError(pwCheck.message || 'Invalid password');
       return false;
     }
 
@@ -86,6 +89,33 @@ export default function ResetPasswordScreen() {
       setSuccess(true);
     }
   };
+
+  if (!sessionChecked) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.formContainer}>
+          <Text style={styles.checkingText}>Verifying reset link...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!isValidSession) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.formContainer}>
+          <Lock size={48} color={Colors.status.error} />
+          <Text style={styles.invalidTitle}>Invalid Reset Link</Text>
+          <Text style={styles.invalidText}>This password reset link is invalid or has expired. Please request a new one.</Text>
+          <Button
+            title="Request New Link"
+            onPress={() => router.replace('/auth/forgot-password')}
+            style={styles.invalidButton}
+          />
+        </View>
+      </View>
+    );
+  }
 
   if (success) {
     return (
@@ -240,6 +270,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  formContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.xl,
+  },
+  checkingText: {
+    fontSize: FontSizes.md,
+    color: Colors.text.secondary,
+  },
+  invalidTitle: {
+    fontSize: FontSizes.xl,
+    fontWeight: FontWeights.bold,
+    color: Colors.text.primary,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  invalidText: {
+    fontSize: FontSizes.md,
+    color: Colors.text.secondary,
+    textAlign: 'center',
+    marginBottom: Spacing.lg,
+  },
+  invalidButton: {
+    marginTop: Spacing.md,
   },
   heroGradient: {
     position: 'absolute',

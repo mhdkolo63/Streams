@@ -50,6 +50,7 @@ import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { LoadingScreen } from '@/components/Loading';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
+import { VALIDATION, sanitizeString, sanitizeFilename } from '@/lib/validation';
 
 const { width } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -141,24 +142,17 @@ export default function UploadVideoScreen() {
 
   const validateVideoFile = (file: any): string | null => {
     if (!file) return 'No file selected';
-    const ext = file.name?.split('.').pop()?.toLowerCase() || '';
-    if (!SUPPORTED_FORMATS.includes(ext)) {
-      return `Unsupported format: .${ext}. Supported: ${SUPPORTED_FORMATS.join(', ').toUpperCase()}`;
-    }
-    if (file.size && file.size > MAX_FILE_SIZE) {
-      return `File too large: ${formatFileSize(file.size)}. Maximum: ${formatFileSize(MAX_FILE_SIZE)}`;
-    }
+    const result = VALIDATION.videoFile({ name: file.name, type: file.type, size: file.size });
+    if (!result.valid) return result.message || 'Invalid video file';
     return null;
   };
 
   const validateThumbnailFile = (file: any): string | null => {
     if (!file) return null;
-    const ext = file.name?.split('.').pop()?.toLowerCase() || '';
     const uri = file.uri || '';
-    if (uri.startsWith('data:image/')) return null; // data URL from auto-gen
-    if (!SUPPORTED_THUMB_FORMATS.includes(ext)) {
-      return `Unsupported thumbnail format: .${ext}. Supported: ${SUPPORTED_THUMB_FORMATS.join(', ').toUpperCase()}`;
-    }
+    if (uri.startsWith('data:image/')) return null;
+    const result = VALIDATION.imageFile({ name: file.name, type: file.type, size: file.size });
+    if (!result.valid) return result.message || 'Invalid image file';
     return null;
   };
 
@@ -511,23 +505,23 @@ export default function UploadVideoScreen() {
       setUploadStage('Saving video record...');
 
       // Parse tags and cast
-      const tagsArray = tags.split(',').map(t => t.trim()).filter(Boolean);
-      const castArray = cast.split(',').map(c => c.trim()).filter(Boolean);
+      const tagsArray = tags.split(',').map(t => sanitizeString(t, 50)).filter(Boolean);
+      const castArray = cast.split(',').map(c => sanitizeString(c, 50)).filter(Boolean);
 
       const { data: insertedVideo, error: insertError } = await supabase
         .from('videos')
         .insert({
-          title: title.trim(),
-          description: description.trim() || null,
+          title: sanitizeString(title, 200),
+          description: description.trim() ? sanitizeString(description, 5000) : null,
           video_url: videoUrl,
           thumbnail_url: thumbnailUrl,
           duration: parseInt(duration) || 0,
           release_year: parseInt(releaseYear) || null,
-          genre: genre.trim() || null,
-          language: language.trim() || null,
+          genre: sanitizeString(genre, 50) || null,
+          language: sanitizeString(language, 30) || null,
           video_cast: castArray.length > 0 ? castArray : null,
-          director: director.trim() || null,
-          producer: producer.trim() || null,
+          director: sanitizeString(director, 100) || null,
+          producer: sanitizeString(producer, 100) || null,
           tags: tagsArray.length > 0 ? tagsArray : null,
           resolution: videoMeta?.resolution || null,
           aspect_ratio: videoMeta?.aspectRatio || null,

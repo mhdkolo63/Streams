@@ -17,6 +17,7 @@ import { useGuestOnly } from '@/hooks/useGlobalStore';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { LoadingScreen } from '@/components/Loading';
+import { VALIDATION, sanitizeString, sanitizeEmail } from '@/lib/validation';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
 
 const { height } = Dimensions.get('window');
@@ -102,9 +103,12 @@ export default function RegisterScreen() {
     if (!password) {
       newErrors.password = 'Password is required';
       isValid = false;
-    } else if (password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
-      isValid = false;
+    } else {
+      const pwCheck = VALIDATION.password(password);
+      if (!pwCheck.valid) {
+        newErrors.password = pwCheck.message || 'Password is too weak';
+        isValid = false;
+      }
     }
 
     if (!confirmPassword) {

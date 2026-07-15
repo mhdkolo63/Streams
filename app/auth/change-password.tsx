@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Lock, ArrowLeft, ArrowRight, CheckCircle, Eye, EyeOff } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
@@ -22,6 +23,7 @@ const { width, height } = Dimensions.get('window');
 export default function ChangePasswordScreen() {
   const { changePassword } = useAuth();
   const router = useRouter();
+  useAuthGuard(true);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
