@@ -71,7 +71,7 @@ export default function PrivacyPolicyScreen() {
       {/* Introduction */}
       <View style={styles.section}>
         <Text style={styles.sectionContent}>
-          At StreamFlix, we are committed to protecting your personal information and your right to privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our streaming service.
+          At StreamWorld, we are committed to protecting your personal information and your right to privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our streaming service.
         </Text>
       </View>
 

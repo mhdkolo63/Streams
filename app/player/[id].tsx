@@ -52,10 +52,10 @@ import { useToast } from '@/components/Toast';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
 
 const { width: initialWidth, height: initialHeight } = Dimensions.get('window');
-const APP_NAME = 'StreamFlix';
+const APP_NAME = 'StreamWorld';
 const CONTROLS_HIDE_DELAY = 4000;
 const DOUBLE_TAP_DELAY = 300;
-const AUTOPLAY_KEY = 'streamflix_autoplay_next';
+const AUTOPLAY_KEY = 'streamworld_autoplay_next';
 const STATUS_THROTTLE_MS = 250;
 
 const getStoredAutoplay = (): boolean => {

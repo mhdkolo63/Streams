@@ -1,26 +1,26 @@
 {
   "expo": {
-    "name": "StreamFlix",
-    "slug": "streamflix",
-    "version": "1.0.0",
+    "name": "StreamWorld",
+    "slug": "streamworld",
+    "version": "2.0.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
-    "scheme": "streamflix",
+    "scheme": "streamworld",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.streamflix.app"
+      "bundleIdentifier": "com.streamworld.app"
     },
     "web": {
       "bundler": "metro",
       "output": "single",
       "favicon": "assets/images/favicon.png",
-      "name": "StreamFlix",
-      "shortName": "StreamFlix",
+      "name": "StreamWorld",
+      "shortName": "StreamWorld",
       "backgroundColor": "#0B0B0B",
       "themeColor": "#E50914",
-      "description": "Stream your favorite movies and TV shows in stunning quality.",
+      "description": "Create, share, and watch videos and shorts from creators around the world.",
       "lang": "en",
       "startUrl": "/",
       "orientation": "default",
@@ -34,14 +34,14 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "StreamFlix needs access to your camera for profile photos."
+          "cameraPermission": "StreamWorld needs access to your camera for profile photos and video uploads."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "StreamFlix needs access to your photos to upload thumbnails.",
-          "cameraPermission": "StreamFlix needs access to your camera."
+          "photosPermission": "StreamWorld needs access to your photos to upload thumbnails and banners.",
+          "cameraPermission": "StreamWorld needs access to your camera."
         }
       ]
     ],

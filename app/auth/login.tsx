@@ -107,7 +107,7 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
-            <Text style={styles.title}>StreamFlix</Text>
+            <Text style={styles.title}>StreamWorld</Text>
             <Text style={styles.subtitle}>Watch anywhere. Cancel anytime.</Text>
           </View>
 
@@ -160,7 +160,7 @@ export default function LoginScreen() {
 
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>New to StreamFlix?</Text>
+              <Text style={styles.dividerText}>New to StreamWorld?</Text>
               <View style={styles.dividerLine} />
             </View>
 

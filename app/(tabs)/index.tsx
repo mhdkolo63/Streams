@@ -297,7 +297,7 @@ export default function HomeScreen() {
           <View style={styles.heroTopGradient} />
           <View style={styles.heroContent}>
             <Animated.Text entering={FadeInUp.delay(200).duration(400)} style={styles.heroTitle}>
-              Welcome to StreamFlix
+              Welcome to StreamWorld
             </Animated.Text>
             <Animated.Text entering={FadeInUp.delay(300).duration(400)} style={styles.heroDescription} numberOfLines={2}>
               Discover the best movies and shows. Sign in to start watching premium content curated just for you.
@@ -337,7 +337,7 @@ export default function HomeScreen() {
           </Animated.View>
 
           <Animated.Text key={`title-${currentHeroIndex}`} entering={FadeInUp.delay(200).duration(400)} style={styles.heroTitle}>
-            {video?.title || 'Welcome to StreamFlix'}
+            {video?.title || 'Welcome to StreamWorld'}
           </Animated.Text>
 
           <Animated.View key={`meta-${currentHeroIndex}`} entering={FadeInUp.delay(300).duration(400)} style={styles.heroMetaRow}>
@@ -430,7 +430,7 @@ export default function HomeScreen() {
       >
         {/* Top Bar */}
         <Animated.View entering={FadeIn.delay(100).duration(300)} style={styles.topBar}>
-          <Text style={styles.appTitle}>StreamFlix</Text>
+          <Text style={styles.appTitle}>StreamWorld</Text>
           <View style={styles.topBarActions}>
             <TouchableOpacity style={styles.topBarIcon} onPress={() => router.push('/search')} activeOpacity={0.7}>
               <Search size={22} color={Colors.text.primary} />

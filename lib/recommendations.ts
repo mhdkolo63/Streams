@@ -155,7 +155,7 @@ export async function getRecommendedVideos(
       .limit(limit * 2);
     return {
       videos: ((fallback as Video[]) || []).filter(v => !excludeSet.has(v.id)).slice(0, limit),
-      reason: 'Popular on StreamFlix',
+      reason: 'Popular on StreamWorld',
       hasHistory: true,
     };
   }

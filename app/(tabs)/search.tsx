@@ -27,7 +27,7 @@ import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constan
 import { cache, CACHE_KEYS, CACHE_TTL } from '@/lib/cache';
 
 const { width } = Dimensions.get('window');
-const RECENT_SEARCHES_KEY = 'streamflix_recent_searches';
+const RECENT_SEARCHES_KEY = 'streamworld_recent_searches';
 const MAX_RECENT_SEARCHES = 10;
 const DEBOUNCE_MS = 350;
 

@@ -83,7 +83,7 @@ export default function HelpCenterScreen() {
 
   const handleEmail = () => {
     const email = 'haskedolo@gmail.com';
-    const subject = 'StreamFlix Support Request';
+    const subject = 'StreamWorld Support Request';
     if (Platform.OS === 'web') {
       window.open(`mailto:${email}?subject=${encodeURIComponent(subject)}`, '_self');
     } else {

@@ -27,6 +27,11 @@ import {
   Eye,
   Calendar,
   Play,
+  Youtube,
+  ListVideo,
+  ThumbsUp,
+  Upload,
+  Bookmark,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useAuth } from '@/contexts/AuthContext';
@@ -189,7 +194,7 @@ export default function ProfileScreen() {
               <User size={48} color={Colors.text.muted} />
             </View>
           </Animated.View>
-          <Text style={styles.guestTitle}>Welcome to StreamFlix</Text>
+          <Text style={styles.guestTitle}>Welcome to StreamWorld</Text>
           <Text style={styles.guestSubtitle}>
             Sign in to access your profile, favorites, and watch history
           </Text>
@@ -224,10 +229,27 @@ export default function ProfileScreen() {
 
   const menuSections = [
     {
+      title: 'Creator',
+      items: [
+        { icon: Youtube, label: 'My Channel', onPress: () => router.push('/channel') },
+        { icon: Upload, label: 'Uploads', onPress: () => router.push('/profile/uploads') },
+      ],
+    },
+    {
+      title: 'Library',
+      items: [
+        { icon: Heart, label: 'Favorites', onPress: () => router.push('/profile/favorites') },
+        { icon: Bookmark, label: 'Watch Later', onPress: () => router.push('/profile/watch-later') },
+        { icon: ThumbsUp, label: 'Liked Videos', onPress: () => router.push('/profile/liked') },
+        { icon: Clock, label: 'Watch History', onPress: () => router.push('/profile/history') },
+      ],
+    },
+    {
       title: 'Account',
       items: [
         { icon: User, label: 'Edit Profile', onPress: () => router.push('/profile/edit') },
         { icon: Lock, label: 'Change Password', onPress: () => router.push('/auth/change-password') },
+        { icon: Settings, label: 'Settings', onPress: () => router.push('/profile/settings') },
         { icon: Bell, label: 'Notifications', badge: unreadCount, onPress: () => router.push('/notifications') },
       ],
     },
@@ -382,7 +404,7 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </Animated.View>
 
-      <Text style={styles.version}>StreamFlix v1.0.0</Text>
+      <Text style={styles.version}>StreamWorld v2.0.0</Text>
     </ScrollView>
   );
 }

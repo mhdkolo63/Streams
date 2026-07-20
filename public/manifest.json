@@ -1,7 +1,7 @@
 {
-  "name": "StreamFlix - Watch Movies & TV Shows",
-  "short_name": "StreamFlix",
-  "description": "Stream your favorite movies and TV shows in stunning quality. Discover, watch, and enjoy unlimited entertainment.",
+  "name": "StreamWorld - Create, Watch & Share",
+  "short_name": "StreamWorld",
+  "description": "Create, share, and watch videos and shorts from creators around the world.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0B0B0B",

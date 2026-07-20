@@ -136,7 +136,7 @@ export default function RegisterScreen() {
       const signUpEmail =
         contactMethod === 'email'
           ? email.toLowerCase().trim()
-          : `${phone.trim().replace(/[^0-9]/g, '')}@phone.streamflix.app`;
+          : `${phone.trim().replace(/[^0-9]/g, '')}@phone.streamworld.app`;
 
       const { error: signUpError } = await signUp(
         signUpEmail,
@@ -202,7 +202,7 @@ export default function RegisterScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
-            <Text style={styles.title}>StreamFlix</Text>
+            <Text style={styles.title}>StreamWorld</Text>
             <Text style={styles.subtitle}>Start your streaming journey</Text>
           </View>
 

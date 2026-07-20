@@ -193,7 +193,7 @@ export default function AdminSettingsScreen() {
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.version}>StreamFlix Admin v1.0.0</Text>
+      <Text style={styles.version}>StreamWorld Admin v2.0.0</Text>
     </ScrollView>
   );
 }
