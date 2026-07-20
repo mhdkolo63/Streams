@@ -86,7 +86,7 @@ export interface Video {
   views_count: number;
   like_count: number;
   uploader_id: string | null;
-  status: 'draft' | 'published' | 'unpublished' | 'private';
+  status: 'draft' | 'published' | 'unlisted' | 'private';
   created_at: string;
   updated_at: string;
   categories?: Category[];

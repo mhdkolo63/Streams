@@ -231,7 +231,8 @@ export default function ProfileScreen() {
     {
       title: 'Creator',
       items: [
-        { icon: Youtube, label: 'My Channel', onPress: () => router.push('/channel') },
+        { icon: Youtube, label: 'Creator Studio', onPress: () => router.push('/studio') },
+        { icon: Film, label: 'My Channel', onPress: () => router.push('/channel') },
         { icon: Upload, label: 'Uploads', onPress: () => router.push('/profile/uploads') },
       ],
     },

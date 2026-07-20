@@ -21,6 +21,7 @@ import {
   Settings,
   Share2,
   Youtube,
+  Clapperboard,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { supabase, Video, Profile } from '@/lib/supabase';
@@ -201,6 +202,9 @@ export default function MyChannelScreen() {
             </TouchableOpacity>
             <Text style={styles.headerTitle}>My Channel</Text>
             <View style={styles.headerActions}>
+              <TouchableOpacity style={styles.headerIcon} onPress={() => router.push('/studio')}>
+                <Clapperboard size={20} color={Colors.text.secondary} />
+              </TouchableOpacity>
               <TouchableOpacity style={styles.headerIcon} onPress={() => toast.info('Coming soon', 'Sharing is not available yet')}>
                 <Share2 size={20} color={Colors.text.secondary} />
               </TouchableOpacity>
@@ -297,8 +301,8 @@ export default function MyChannelScreen() {
                 icon={<Film size={64} color={Colors.text.muted} />}
                 title={activeTab === 'shorts' ? 'No shorts yet' : 'No videos uploaded'}
                 message={activeTab === 'shorts' ? 'Upload short vertical videos to see them here.' : 'Upload your first video to start building your channel.'}
-                onAction={() => router.push('/admin/upload')}
-                actionLabel="Upload Video"
+                onAction={() => router.push(activeTab === 'shorts' ? '/studio/upload-short' : '/studio/upload')}
+                actionLabel={activeTab === 'shorts' ? 'Upload Short' : 'Upload Video'}
               />
             </View>
           ) : (
