@@ -120,3 +120,24 @@ export interface VideoView {
   user_agent: string | null;
   country: string | null;
 }
+
+export interface Comment {
+  id: string;
+  video_id: string;
+  user_id: string;
+  parent_id: string | null;
+  body: string;
+  like_count: number;
+  created_at: string;
+  updated_at: string;
+  profiles?: Profile;
+  replies?: Comment[];
+  liked_by_me?: boolean;
+}
+
+export interface Subscription {
+  id: string;
+  subscriber_id: string;
+  channel_id: string;
+  created_at: string;
+}
