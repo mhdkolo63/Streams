@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 import {
   Play, Search, Bell, Flame, Star, Clock,
   TrendingUp, Sparkles, Film, Calendar, Plus, Check,
-  Eye, Heart, ThumbsUp,
+  Eye, Heart, ThumbsUp, Compass,
 } from 'lucide-react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, ZoomIn,
@@ -451,6 +451,22 @@ export default function HomeScreen() {
         {/* Hero Banner */}
         {renderHeroBanner()}
 
+        {/* Quick Navigation */}
+        <View style={styles.quickNav}>
+          <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/trending')} activeOpacity={0.7}>
+            <Flame size={22} color={Colors.primary} fill={Colors.primary} />
+            <Text style={styles.quickNavText}>Trending</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/explore')} activeOpacity={0.7}>
+            <Compass size={22} color={Colors.status.info} />
+            <Text style={styles.quickNavText}>Explore</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/shorts')} activeOpacity={0.7}>
+            <Film size={22} color={Colors.status.success} />
+            <Text style={styles.quickNavText}>Shorts</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Content Sections */}
         <View style={styles.contentContainer}>
           {/* Continue Watching - only if user has watched videos */}
@@ -482,7 +498,7 @@ export default function HomeScreen() {
             title="Trending Now"
             videos={trendingVideos}
             loading={loading}
-            onSeeAll={() => router.push('/search')}
+            onSeeAll={() => router.push('/trending')}
             icon={TrendingUp}
             emptyMessage="No trending videos available yet."
           />
@@ -699,5 +715,8 @@ const styles = StyleSheet.create({
   heroDotIndicator: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(255, 255, 255, 0.4)' },
   heroDotIndicatorActive: { backgroundColor: Colors.primary, width: 24 },
   contentContainer: { marginTop: Spacing.lg },
+  quickNav: { flexDirection: 'row', paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: Spacing.md },
+  quickNavBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, backgroundColor: Colors.card, borderRadius: BorderRadius.lg, paddingVertical: Spacing.md },
+  quickNavText: { fontSize: FontSizes.sm, fontWeight: FontWeights.semibold, color: Colors.text.primary },
   footer: { height: Spacing.xxl },
 });

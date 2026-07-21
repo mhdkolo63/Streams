@@ -24,6 +24,9 @@ export interface CreatorDashboardStats {
   subscribers: number;
   watchTime: number;
   totalUploads: number;
+  engagementRate: number;
+  topVideos: Video[];
+  topShorts: Video[];
 }
 
 export interface CreatorActivity {
@@ -36,8 +39,9 @@ export interface CreatorActivity {
 export async function getCreatorStats(userId: string): Promise<CreatorDashboardStats> {
   const { data: videos } = await supabase
     .from('videos')
-    .select('id, duration, views_count, aspect_ratio, status')
-    .eq('uploader_id', userId);
+    .select('id, title, duration, views_count, aspect_ratio, status, thumbnail_url, created_at')
+    .eq('uploader_id', userId)
+    .order('views_count', { ascending: false });
 
   const allVideos = (videos as Video[]) || [];
   const shorts = allVideos.filter(
@@ -47,10 +51,11 @@ export async function getCreatorStats(userId: string): Promise<CreatorDashboardS
 
   let totalViews = allVideos.reduce((sum, v) => sum + (v.views_count || 0), 0);
   let totalLikes = 0;
+  let totalComments = 0;
   let watchTime = 0;
 
   if (videoIds.length > 0) {
-    const [viewsRes, likesRes] = await Promise.all([
+    const [viewsRes, likesRes, commentsRes] = await Promise.all([
       supabase
         .from('video_views')
         .select('id, video_id', { count: 'exact', head: false })
@@ -60,12 +65,16 @@ export async function getCreatorStats(userId: string): Promise<CreatorDashboardS
         .from('video_likes')
         .select('id', { count: 'exact', head: true })
         .in('video_id', videoIds),
+      supabase
+        .from('comments')
+        .select('id', { count: 'exact', head: true })
+        .in('video_id', videoIds),
     ]);
 
     if (viewsRes.count !== null) totalViews = viewsRes.count;
     if (likesRes.count !== null) totalLikes = likesRes.count;
+    if (commentsRes.count !== null) totalComments = commentsRes.count;
 
-    // Estimate watch time from views
     if (viewsRes.data) {
       const viewCounts = new Map<string, number>();
       viewsRes.data.forEach((v: any) => {
@@ -77,15 +86,27 @@ export async function getCreatorStats(userId: string): Promise<CreatorDashboardS
     }
   }
 
+  const { count: subCount } = await supabase
+    .from('subscriptions')
+    .select('id', { count: 'exact', head: true })
+    .eq('channel_id', userId);
+
+  const engagementRate = totalViews > 0
+    ? ((totalLikes + totalComments) / totalViews) * 100
+    : 0;
+
   return {
     totalVideos: allVideos.length - shorts.length,
     totalShorts: shorts.length,
     totalViews,
     totalLikes,
-    totalComments: 0,
-    subscribers: 0,
+    totalComments,
+    subscribers: subCount || 0,
     watchTime,
     totalUploads: allVideos.length,
+    engagementRate: Math.round(engagementRate * 10) / 10,
+    topVideos: allVideos.slice(0, 5),
+    topShorts: shorts.slice(0, 5),
   };
 }
 

@@ -23,6 +23,7 @@ import {
   HardDrive,
   TrendingUp,
   Plus,
+  Zap,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useAuth } from '@/contexts/AuthContext';
@@ -89,6 +90,7 @@ export default function StudioDashboard() {
     { icon: Users, label: 'Subscribers', value: stats?.subscribers ?? 0, color: '#EC4899' },
     { icon: Clock, label: 'Watch Time', value: formatDuration(stats?.watchTime ?? 0), color: '#06B6D4' },
     { icon: TrendingUp, label: 'Uploads', value: stats?.totalUploads ?? 0, color: '#F97316' },
+    { icon: Zap, label: 'Engagement', value: `${stats?.engagementRate ?? 0}%`, color: '#A855F7' },
   ];
 
   const quickActions = [
@@ -109,6 +111,12 @@ export default function StudioDashboard() {
     if (hours < 24) return `${hours}h ago`;
     if (days < 7) return `${days}d ago`;
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const formatCount = (n: number): string => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return `${n}`;
   };
 
   const getActivityIcon = (type: CreatorActivity['type']) => {
@@ -213,6 +221,42 @@ export default function StudioDashboard() {
             )}
           </Animated.View>
 
+          {/* Top Performing Videos */}
+          {stats && stats.topVideos && stats.topVideos.length > 0 && (
+            <Animated.View entering={FadeInDown.delay(250).duration(300)}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Top Performing Videos</Text>
+              </View>
+              <View style={styles.topVideosList}>
+                {stats.topVideos.slice(0, 3).map((v, i) => (
+                  <TouchableOpacity
+                    key={v.id}
+                    style={styles.topVideoItem}
+                    onPress={() => router.push(`/video/${v.id}`)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.topVideoRank}>
+                      <Text style={styles.topVideoRankText}>#{i + 1}</Text>
+                    </View>
+                    <View style={styles.topVideoInfo}>
+                      <Text style={styles.topVideoTitle} numberOfLines={1}>{v.title}</Text>
+                      <View style={styles.topVideoMeta}>
+                        <View style={styles.topVideoMetaItem}>
+                          <Eye size={12} color={Colors.text.muted} />
+                          <Text style={styles.topVideoMetaText}>{formatCount(v.views_count)}</Text>
+                        </View>
+                        <View style={styles.topVideoMetaItem}>
+                          <ThumbsUp size={12} color={Colors.text.muted} />
+                          <Text style={styles.topVideoMetaText}>{formatCount(v.like_count || 0)}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </Animated.View>
+          )}
+
           {/* Upload CTA */}
           <Animated.View entering={FadeInDown.delay(300).duration(300)} style={styles.uploadCTA}>
             <View style={styles.ctaIcon}>
@@ -294,6 +338,15 @@ const styles = StyleSheet.create({
   emptyActivity: { alignItems: 'center', padding: Spacing.xl, gap: Spacing.sm },
   emptyText: { fontSize: FontSizes.md, color: Colors.text.secondary, fontWeight: FontWeights.medium },
   emptySubtext: { fontSize: FontSizes.sm, color: Colors.text.muted },
+  topVideosList: { gap: Spacing.sm, marginBottom: Spacing.lg },
+  topVideoItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.card, borderRadius: BorderRadius.md, padding: Spacing.md, gap: Spacing.md, borderWidth: 1, borderColor: Colors.border },
+  topVideoRank: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(229, 9, 20, 0.1)', justifyContent: 'center', alignItems: 'center' },
+  topVideoRankText: { fontSize: FontSizes.sm, fontWeight: FontWeights.bold, color: Colors.primary },
+  topVideoInfo: { flex: 1 },
+  topVideoTitle: { fontSize: FontSizes.sm, fontWeight: FontWeights.semibold, color: Colors.text.primary, marginBottom: 4 },
+  topVideoMeta: { flexDirection: 'row', gap: Spacing.md },
+  topVideoMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  topVideoMetaText: { fontSize: FontSizes.xs, color: Colors.text.muted },
   uploadCTA: {
     flexDirection: 'row',
     alignItems: 'center',
