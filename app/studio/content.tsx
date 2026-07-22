@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import { useRouter, Stack } from 'expo-router';
 import {
@@ -27,6 +28,12 @@ import {
   Lock,
   EyeOff,
   Clock,
+  Search,
+  X,
+  ArrowUpDown,
+  Copy,
+  Archive,
+  CheckCircle,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { supabase, Video } from '@/lib/supabase';
@@ -34,12 +41,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { useToast } from '@/components/Toast';
 import { EmptyState } from '@/components/EmptyState';
+import { Input } from '@/components/Input';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
-import { deleteCreatorVideo, getCreatorVideos } from '@/lib/creators';
+import { deleteCreatorVideo, getCreatorVideos, updateCreatorVideo } from '@/lib/creators';
 
-const { width } = Dimensions.get('window');
-
-type FilterTab = 'all' | 'videos' | 'shorts';
+type FilterTab = 'all' | 'videos' | 'shorts' | 'drafts' | 'scheduled';
+type SortOption = 'date' | 'views' | 'likes' | 'comments';
 
 export default function StudioContentScreen() {
   useAuthGuard(true);
@@ -51,6 +58,10 @@ export default function StudioContentScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const [sortBy, setSortBy] = useState<SortOption>('date');
 
   const fetchVideos = useCallback(async () => {
     if (!user) {
@@ -79,12 +90,50 @@ export default function StudioContentScreen() {
   }, [fetchVideos]);
 
   const isShort = (v: Video) => v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60);
+  const isDraft = (v: Video) => v.status === 'draft';
+  const isScheduled = (v: Video) => v.status === 'draft' && (v as any).scheduled_at;
 
-  const filteredVideos = videos.filter((v) => {
-    if (activeTab === 'videos') return !isShort(v);
-    if (activeTab === 'shorts') return isShort(v);
-    return true;
-  });
+  const filteredAndSorted = useMemo(() => {
+    let result = [...videos];
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter((v) => v.title?.toLowerCase().includes(q));
+    }
+
+    switch (activeTab) {
+      case 'videos':
+        result = result.filter((v) => !isShort(v) && !isDraft(v));
+        break;
+      case 'shorts':
+        result = result.filter((v) => isShort(v) && !isDraft(v));
+        break;
+      case 'drafts':
+        result = result.filter((v) => isDraft(v) && !isScheduled(v));
+        break;
+      case 'scheduled':
+        result = result.filter((v) => isScheduled(v));
+        break;
+    }
+
+    switch (sortBy) {
+      case 'views':
+        result.sort((a, b) => (b.views_count || 0) - (a.views_count || 0));
+        break;
+      case 'likes':
+        result.sort((a, b) => (b.like_count || 0) - (a.like_count || 0));
+        break;
+      case 'comments':
+        result.sort((a, b) => ((b as any).comment_count || 0) - ((a as any).comment_count || 0));
+        break;
+      case 'date':
+      default:
+        result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        break;
+    }
+
+    return result;
+  }, [videos, searchQuery, activeTab, sortBy]);
 
   const handleDelete = (video: Video) => {
     setMenuOpenId(null);
@@ -109,6 +158,71 @@ export default function StudioContentScreen() {
         },
       ]
     );
+  };
+
+  const handleDuplicate = async (video: Video) => {
+    setMenuOpenId(null);
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from('videos')
+        .insert({
+          title: `${video.title} (Copy)`,
+          description: video.description,
+          video_url: video.video_url,
+          thumbnail_url: video.thumbnail_url,
+          duration: video.duration,
+          genre: video.genre,
+          language: video.language,
+          tags: video.tags,
+          status: 'private',
+          views_count: 0,
+          like_count: 0,
+          uploader_id: user.id,
+          is_short: video.is_short,
+          aspect_ratio: video.aspect_ratio,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setVideos((prev) => [data as Video, ...prev]);
+        toast.success('Video duplicated', 'A private copy has been created');
+      }
+    } catch (error) {
+      toast.error('Failed to duplicate', 'Please try again');
+    }
+  };
+
+  const handleArchive = async (video: Video) => {
+    setMenuOpenId(null);
+    if (!user) return;
+    const success = await updateCreatorVideo(video.id, user.id, { status: 'private' } as any);
+    if (success) {
+      setVideos((prev) =>
+        prev.map((v) => (v.id === video.id ? { ...v, status: 'private' } : v))
+      );
+      toast.success('Video archived', 'Moved to private');
+    } else {
+      toast.error('Archive failed', 'Please try again');
+    }
+  };
+
+  const handlePublishToggle = async (video: Video) => {
+    setMenuOpenId(null);
+    if (!user) return;
+    const newStatus = video.status === 'published' ? 'unlisted' : 'published';
+    const success = await updateCreatorVideo(video.id, user.id, { status: newStatus } as any);
+    if (success) {
+      setVideos((prev) =>
+        prev.map((v) => (v.id === video.id ? { ...v, status: newStatus } : v))
+      );
+      toast.success(
+        newStatus === 'published' ? 'Video published' : 'Video unpublished',
+        newStatus === 'published' ? 'Now visible to everyone' : 'Changed to unlisted'
+      );
+    }
   };
 
   const handleShare = (video: Video) => {
@@ -137,7 +251,7 @@ export default function StudioContentScreen() {
       case 'published': return 'Public';
       case 'unlisted': return 'Unlisted';
       case 'private': return 'Private';
-      case 'draft': return 'Processing';
+      case 'draft': return 'Draft';
       default: return status;
     }
   };
@@ -150,6 +264,13 @@ export default function StudioContentScreen() {
 
   const formatDate = (dateString: string): string => {
     return new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const sortLabels: Record<SortOption, string> = {
+    date: 'Date (Newest)',
+    views: 'Most Viewed',
+    likes: 'Most Liked',
+    comments: 'Most Commented',
   };
 
   const renderVideoItem = ({ item, index }: { item: Video; index: number }) => (
@@ -190,6 +311,12 @@ export default function StudioContentScreen() {
               <ThumbsUp size={12} color={Colors.text.muted} />
               <Text style={styles.metaText}>{formatViews(item.like_count || 0)}</Text>
             </View>
+            {(item as any).comment_count ? (
+              <View style={styles.metaItem}>
+                <MessageSquare size={12} color={Colors.text.muted} />
+                <Text style={styles.metaText}>{formatViews((item as any).comment_count as number)}</Text>
+              </View>
+            ) : null}
             <View style={styles.metaItem}>
               <Calendar size={12} color={Colors.text.muted} />
               <Text style={styles.metaText}>{formatDate(item.created_at)}</Text>
@@ -216,6 +343,18 @@ export default function StudioContentScreen() {
             <Eye size={16} color={Colors.text.primary} />
             <Text style={styles.dropdownText}>View</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.dropdownItem} onPress={() => handlePublishToggle(item)}>
+            <Globe size={16} color={Colors.text.primary} />
+            <Text style={styles.dropdownText}>{item.status === 'published' ? 'Unpublish' : 'Publish'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dropdownItem} onPress={() => handleDuplicate(item)}>
+            <Copy size={16} color={Colors.text.primary} />
+            <Text style={styles.dropdownText}>Duplicate</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dropdownItem} onPress={() => handleArchive(item)}>
+            <Archive size={16} color={Colors.text.primary} />
+            <Text style={styles.dropdownText}>Archive (Private)</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.dropdownItem} onPress={() => handleShare(item)}>
             <Share2 size={16} color={Colors.text.primary} />
             <Text style={styles.dropdownText}>Share</Text>
@@ -237,17 +376,32 @@ export default function StudioContentScreen() {
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 } as any}>
             <ArrowLeft size={24} color={Colors.text.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Content</Text>
+          <Text style={styles.headerTitle}>Content Manager</Text>
           <TouchableOpacity style={styles.uploadBtn} onPress={() => router.push('/studio/upload')}>
             <Play size={16} color={Colors.text.primary} fill={Colors.text.primary} />
           </TouchableOpacity>
         </View>
 
-        <View style={styles.filterTabs}>
+        {showSearch && (
+          <View style={styles.searchContainer}>
+            <Input
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search your videos..."
+              leftIcon={<Search size={18} color={Colors.text.muted} />}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+        )}
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterTabs}>
           {([
             { key: 'all' as FilterTab, label: 'All' },
             { key: 'videos' as FilterTab, label: 'Videos' },
             { key: 'shorts' as FilterTab, label: 'Shorts' },
+            { key: 'drafts' as FilterTab, label: 'Drafts' },
+            { key: 'scheduled' as FilterTab, label: 'Scheduled' },
           ]).map((tab) => (
             <TouchableOpacity
               key={tab.key}
@@ -257,7 +411,33 @@ export default function StudioContentScreen() {
               <Text style={[styles.filterTabText, activeTab === tab.key && styles.filterTabTextActive]}>{tab.label}</Text>
             </TouchableOpacity>
           ))}
+        </ScrollView>
+
+        <View style={styles.toolbar}>
+          <TouchableOpacity style={styles.toolBtn} onPress={() => setShowSearch(!showSearch)}>
+            {showSearch ? <X size={16} color={Colors.text.secondary} /> : <Search size={16} color={Colors.text.secondary} />}
+            <Text style={styles.toolBtnText}>Search</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.toolBtn} onPress={() => setShowSortMenu(!showSortMenu)}>
+            <ArrowUpDown size={16} color={Colors.text.secondary} />
+            <Text style={styles.toolBtnText}>{sortLabels[sortBy]}</Text>
+          </TouchableOpacity>
         </View>
+
+        {showSortMenu && (
+          <View style={styles.sortMenu}>
+            {(Object.keys(sortLabels) as SortOption[]).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.sortItem, sortBy === opt && styles.sortItemActive]}
+                onPress={() => { setSortBy(opt); setShowSortMenu(false); }}
+              >
+                <Text style={[styles.sortItemText, sortBy === opt && styles.sortItemTextActive]}>{sortLabels[opt]}</Text>
+                {sortBy === opt && <CheckCircle size={14} color={Colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -271,18 +451,18 @@ export default function StudioContentScreen() {
               </View>
             ))}
           </View>
-        ) : filteredVideos.length === 0 ? (
+        ) : filteredAndSorted.length === 0 ? (
           <EmptyState
             type="custom"
             icon={<Film size={64} color={Colors.text.muted} />}
-            title={activeTab === 'shorts' ? 'No shorts uploaded' : 'No videos uploaded'}
-            message="Start creating content and it will appear here."
+            title={searchQuery ? 'No results found' : activeTab === 'shorts' ? 'No shorts uploaded' : activeTab === 'drafts' ? 'No drafts' : 'No videos uploaded'}
+            message={searchQuery ? `No videos match "${searchQuery}"` : 'Start creating content and it will appear here.'}
             onAction={() => router.push(activeTab === 'shorts' ? '/studio/upload-short' : '/studio/upload')}
             actionLabel={activeTab === 'shorts' ? 'Upload Short' : 'Upload Video'}
           />
         ) : (
           <FlatList
-            data={filteredVideos}
+            data={filteredAndSorted}
             keyExtractor={(item) => item.id}
             renderItem={renderVideoItem}
             contentContainerStyle={styles.list}
@@ -295,27 +475,29 @@ export default function StudioContentScreen() {
   );
 }
 
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.lg, paddingTop: 50, paddingBottom: Spacing.md, gap: Spacing.md },
   backButton: { padding: Spacing.xs },
   headerTitle: { flex: 1, fontSize: FontSizes.xxl, fontWeight: FontWeights.bold, color: Colors.text.primary },
   uploadBtn: { padding: Spacing.sm, backgroundColor: Colors.primary, borderRadius: BorderRadius.md },
-  filterTabs: { flexDirection: 'row', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
+  searchContainer: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
+  filterTabs: { flexDirection: 'row', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm, gap: Spacing.sm },
   filterTab: { paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: BorderRadius.full, backgroundColor: Colors.card },
   filterTabActive: { backgroundColor: 'rgba(229, 9, 20, 0.15)' },
   filterTabText: { fontSize: FontSizes.sm, color: Colors.text.secondary, fontWeight: FontWeights.medium },
   filterTabTextActive: { color: Colors.primary, fontWeight: FontWeights.semibold },
+  toolbar: { flexDirection: 'row', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm, gap: Spacing.sm },
+  toolBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.card, paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border },
+  toolBtnText: { fontSize: FontSizes.xs, color: Colors.text.secondary, fontWeight: FontWeights.medium },
+  sortMenu: { marginHorizontal: Spacing.lg, backgroundColor: Colors.card, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.xs, gap: 2, marginBottom: Spacing.sm },
+  sortItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: BorderRadius.sm },
+  sortItemActive: { backgroundColor: 'rgba(229, 9, 20, 0.1)' },
+  sortItemText: { fontSize: FontSizes.sm, color: Colors.text.secondary },
+  sortItemTextActive: { color: Colors.primary, fontWeight: FontWeights.semibold },
   list: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxl },
-  contentCard: {
-    backgroundColor: Colors.card,
-    borderRadius: BorderRadius.lg,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: 'hidden',
-    position: 'relative',
-  },
+  contentCard: { backgroundColor: Colors.card, borderRadius: BorderRadius.lg, marginBottom: Spacing.sm, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden', position: 'relative' },
   cardBody: { flexDirection: 'row', padding: Spacing.sm, gap: Spacing.md },
   thumbnailContainer: { position: 'relative' },
   thumbnail: { width: 120, height: 68, borderRadius: BorderRadius.md },
@@ -326,27 +508,11 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 9, color: Colors.text.primary, fontWeight: FontWeights.medium },
   cardInfo: { flex: 1, justifyContent: 'center' },
   cardTitle: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text.primary, marginBottom: 4, lineHeight: 18 },
-  cardMeta: { flexDirection: 'row', gap: Spacing.md },
+  cardMeta: { flexDirection: 'row', gap: Spacing.md, flexWrap: 'wrap' },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { fontSize: FontSizes.xs, color: Colors.text.muted },
   menuButton: { position: 'absolute', top: Spacing.sm, right: Spacing.sm, padding: Spacing.xs, zIndex: 10 },
-  dropdownMenu: {
-    position: 'absolute',
-    top: 40,
-    right: Spacing.sm,
-    backgroundColor: Colors.card,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.xs,
-    zIndex: 100,
-    minWidth: 120,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
+  dropdownMenu: { position: 'absolute', top: 40, right: Spacing.sm, backgroundColor: Colors.card, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.xs, zIndex: 100, minWidth: 160, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8 },
   dropdownItem: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md },
   dropdownText: { fontSize: FontSizes.sm, color: Colors.text.primary },
   dropdownDelete: { marginTop: 2, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: Spacing.sm },
