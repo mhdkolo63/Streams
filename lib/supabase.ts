@@ -28,10 +28,19 @@ export interface Profile {
   username: string | null;
   bio: string | null;
   banner_url: string | null;
+  cover_url: string | null;
+  website: string | null;
   is_admin: boolean;
   is_premium: boolean;
   is_eligible_creator: boolean;
   monetization_approved: boolean;
+  monetization_eligible: boolean;
+  verified: boolean;
+  country: string | null;
+  language: string | null;
+  date_of_birth: string | null;
+  gender: string | null;
+  watch_time: number;
   created_at: string;
   updated_at: string;
 }
@@ -139,6 +148,11 @@ export interface Comment {
   like_count: number;
   created_at: string;
   updated_at: string;
+  is_pinned: boolean;
+  is_hearted: boolean;
+  hearted_by: string | null;
+  edited_at: string | null;
+  is_reported: boolean;
   profiles?: Profile;
   replies?: Comment[];
   liked_by_me?: boolean;
@@ -148,6 +162,71 @@ export interface Subscription {
   id: string;
   subscriber_id: string;
   channel_id: string;
+  notification_preference: 'all' | 'personalized' | 'none';
+  created_at: string;
+}
+
+export interface Playlist {
+  id: string;
+  creator_id: string;
+  user_id: string | null;
+  title: string;
+  description: string | null;
+  thumbnail_url: string | null;
+  status: string;
+  video_count: number;
+  is_system: boolean;
+  system_type: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlaylistVideo {
+  id: string;
+  playlist_id: string;
+  video_id: string;
+  position: number;
+  added_at: string;
+  video?: Video;
+}
+
+export interface CommunityPost {
+  id: string;
+  creator_id: string;
+  type: 'text' | 'image' | 'poll' | 'announcement';
+  body: string | null;
+  image_url: string | null;
+  poll_question: string | null;
+  poll_options: string[] | null;
+  poll_expires_at: string | null;
+  like_count: number;
+  comment_count: number;
+  is_pinned: boolean;
+  created_at: string;
+  updated_at: string;
+  creator?: Profile;
+  liked_by_me?: boolean;
+  my_vote?: number;
+}
+
+export interface PostComment {
+  id: string;
+  post_id: string;
+  user_id: string;
+  parent_id: string | null;
+  body: string;
+  like_count: number;
+  created_at: string;
+  updated_at: string;
+  profiles?: Profile;
+  liked_by_me?: boolean;
+}
+
+export interface SocialLink {
+  id: string;
+  creator_id: string;
+  platform: string;
+  url: string;
   created_at: string;
 }
 
@@ -212,6 +291,7 @@ export interface Download {
   quality: string;
   file_size: number;
   status: 'pending' | 'downloading' | 'completed' | 'failed' | 'expired';
+  progress?: number;
   storage_path: string | null;
   downloaded_at: string | null;
   expires_at: string | null;

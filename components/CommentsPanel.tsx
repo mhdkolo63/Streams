@@ -11,7 +11,7 @@ import {
   Dimensions,
   ActivityIndicator,
 } from 'react-native';
-import { X, Send, Heart, Trash2, MessageCircle, ArrowLeft, MoreHorizontal, Flag } from 'lucide-react-native';
+import { X, Send, Heart, Trash2, MessageCircle, ArrowLeft, MoreHorizontal, Flag, Pin, Heart as HeartIcon, Edit2, Check } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, SlideInDown } from 'react-native-reanimated';
 import { supabase, Comment, Profile } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -21,6 +21,11 @@ import {
   addComment,
   deleteComment,
   toggleCommentLike,
+  editComment,
+  pinComment,
+  unpinComment,
+  heartComment,
+  reportComment,
   type CommentWithProfile,
   type CommentSort,
 } from '@/lib/creators';
@@ -32,9 +37,10 @@ interface CommentsPanelProps {
   videoId: string;
   visible: boolean;
   onClose: () => void;
+  videoOwnerId?: string;
 }
 
-export function CommentsPanel({ videoId, visible, onClose }: CommentsPanelProps) {
+export function CommentsPanel({ videoId, visible, onClose, videoOwnerId }: CommentsPanelProps) {
   const { user } = useAuth();
   const toast = useToast();
   const [comments, setComments] = useState<CommentWithProfile[]>([]);
@@ -46,6 +52,12 @@ export function CommentsPanel({ videoId, visible, onClose }: CommentsPanelProps)
   const [replyText, setReplyText] = useState('');
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set());
   const [commentCount, setCommentCount] = useState(0);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [menuCommentId, setMenuCommentId] = useState<string | null>(null);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportingCommentId, setReportingCommentId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState('');
 
   const fetchComments = useCallback(async () => {
     setLoading(true);
@@ -148,6 +160,60 @@ export function CommentsPanel({ videoId, visible, onClose }: CommentsPanelProps)
       );
     } catch (error) {
       toast.error('Failed to like', 'Please try again');
+    }
+  };
+
+  const handleEditComment = async (commentId: string) => {
+    if (!user || !editText.trim()) return;
+    const success = await editComment(commentId, user.id, editText);
+    if (success) {
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, body: editText, edited_at: new Date().toISOString() } : c
+      ));
+      setEditingCommentId(null);
+      setEditText('');
+      toast.success('Comment edited');
+    } else {
+      toast.error('Failed to edit comment');
+    }
+  };
+
+  const handlePinComment = async (commentId: string) => {
+    const comment = comments.find(c => c.id === commentId);
+    if (comment?.is_pinned) {
+      await unpinComment(commentId);
+      setComments(prev => prev.map(c => c.id === commentId ? { ...c, is_pinned: false } : c));
+      toast.info('Comment unpinned');
+    } else {
+      await pinComment(commentId, videoOwnerId || '');
+      setComments(prev => prev.map(c => c.id === commentId ? { ...c, is_pinned: true } : c));
+      toast.success('Comment pinned');
+    }
+    setMenuCommentId(null);
+  };
+
+  const handleHeartComment = async (commentId: string) => {
+    if (!videoOwnerId) return;
+    const success = await heartComment(commentId, videoOwnerId);
+    if (success) {
+      setComments(prev => prev.map(c =>
+        c.id === commentId ? { ...c, is_hearted: !c.is_hearted, hearted_by: !c.is_hearted ? videoOwnerId : null } : c
+      ));
+    }
+    setMenuCommentId(null);
+  };
+
+  const handleReportComment = async () => {
+    if (!user || !reportingCommentId || !reportReason.trim()) return;
+    const success = await reportComment(reportingCommentId, user.id, reportReason);
+    if (success) {
+      toast.success('Comment reported', 'Thank you for helping keep the community safe');
+      setShowReportModal(false);
+      setReportingCommentId(null);
+      setReportReason('');
+      setMenuCommentId(null);
+    } else {
+      toast.error('Failed to report comment');
     }
   };
 

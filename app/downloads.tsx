@@ -11,7 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Download, Trash2, HardDrive, Clock, CheckCircle,
-  AlertCircle, Loader, Film,
+  AlertCircle, Loader, Film, Pause, Play, X, Wifi, Zap,
 } from 'lucide-react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Colors, Spacing, BorderRadius, FontSizes, FontWeights } from '../constants/theme';
@@ -37,6 +37,8 @@ export default function DownloadsPage() {
   const [loading, setLoading] = useState(true);
   const [storageUsed, setStorageUsed] = useState(0);
   const [downloadsEnabled, setDownloadsEnabled] = useState(true);
+  const [activeTab, setActiveTab] = useState<'downloads' | 'queue'>('downloads');
+  const [queuePaused, setQueuePaused] = useState(false);
 
   const loadDownloads = useCallback(async () => {
     if (!user) return;
@@ -138,12 +140,52 @@ export default function DownloadsPage() {
         </Text>
       </View>
 
+      {/* Tab Switcher */}
+      <View style={styles.tabSwitcher}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'downloads' && styles.tabActive]}
+          onPress={() => setActiveTab('downloads')}
+        >
+          <Text style={[styles.tabText, activeTab === 'downloads' && styles.tabTextActive]}>Downloaded</Text>
+          {downloads.filter(d => d.status === 'completed').length > 0 && (
+            <View style={styles.tabBadge}>
+              <Text style={styles.tabBadgeText}>{downloads.filter(d => d.status === 'completed').length}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'queue' && styles.tabActive]}
+          onPress={() => setActiveTab('queue')}
+        >
+          <Text style={[styles.tabText, activeTab === 'queue' && styles.tabTextActive]}>Queue</Text>
+          {downloads.filter(d => d.status === 'downloading' || d.status === 'pending').length > 0 && (
+            <View style={styles.tabBadge}>
+              <Text style={styles.tabBadgeText}>{downloads.filter(d => d.status === 'downloading' || d.status === 'pending').length}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Queue Controls */}
+      {activeTab === 'queue' && downloads.filter(d => d.status === 'downloading' || d.status === 'pending').length > 0 && (
+        <View style={styles.queueControls}>
+          <TouchableOpacity style={styles.queueControlBtn} onPress={() => setQueuePaused(!queuePaused)}>
+            {queuePaused ? <Play size={16} color={Colors.primary} /> : <Pause size={16} color={Colors.text.secondary} />}
+            <Text style={styles.queueControlText}>{queuePaused ? 'Resume All' : 'Pause All'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.queueControlBtn} onPress={handleClearAll}>
+            <X size={16} color={Colors.status.error} />
+            <Text style={[styles.queueControlText, { color: Colors.status.error }]}>Cancel All</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {loading ? (
         <View style={styles.emptyState}>
           <Loader size={32} color={Colors.text.muted} />
           <Text style={styles.emptyText}>Loading downloads...</Text>
         </View>
-      ) : downloads.length === 0 ? (
+      ) : activeTab === 'downloads' && downloads.filter(d => d.status === 'completed').length === 0 ? (
         <View style={styles.emptyState}>
           <Download size={48} color={Colors.text.muted} />
           <Text style={styles.emptyText}>No downloads yet</Text>
@@ -152,6 +194,59 @@ export default function DownloadsPage() {
             <Text style={styles.browseBtnText}>Browse Videos</Text>
           </TouchableOpacity>
         </View>
+      ) : activeTab === 'queue' ? (
+        <FlatList
+          data={downloads.filter(d => d.status === 'downloading' || d.status === 'pending' || d.status === 'failed')}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item, index }) => {
+            const progress = item.progress || 0;
+            return (
+              <Animated.View entering={FadeInDown.delay(index * 50).duration(200)}>
+                <View style={styles.downloadCard}>
+                  <View style={styles.cardContent}>
+                    <View style={styles.thumbnailContainer}>
+                      <CachedImage uri={item.video?.thumbnail_url || ''} style={styles.thumbnail} />
+                      {item.status === 'downloading' && (
+                        <View style={styles.progressCircle}>
+                          <Text style={styles.progressCircleText}>{progress}%</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.cardInfo}>
+                      <Text style={styles.cardTitle} numberOfLines={2}>
+                        {item.video?.title || 'Unknown Video'}
+                      </Text>
+                      <View style={styles.cardMeta}>
+                        {getStatusIcon(item.status)}
+                        <Text style={styles.cardMetaText}>
+                          {item.status === 'downloading' ? `Downloading... ${progress}%` :
+                           item.status === 'failed' ? 'Download failed' : 'Queued'}
+                        </Text>
+                      </View>
+                      <View style={styles.queueProgressTrack}>
+                        <View style={[styles.queueProgressFill, { width: `${progress}%` }]} />
+                      </View>
+                      {item.file_size > 0 && (
+                        <Text style={styles.fileSize}>{formatFileSize(item.file_size * progress / 100)} / {formatFileSize(item.file_size)}</Text>
+                      )}
+                    </View>
+                  </View>
+                  <View style={styles.queueActions}>
+                    {item.status === 'downloading' && (
+                      <TouchableOpacity style={styles.queueActionBtn}>
+                        <Pause size={16} color={Colors.text.secondary} />
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity style={styles.queueActionBtn} onPress={() => handleRemove(item.id, item.video?.title || 'Video')}>
+                      <X size={16} color={Colors.status.error} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Animated.View>
+            );
+          }}
+        />
       ) : (
         <FlatList
           data={downloads}
@@ -250,5 +345,21 @@ const styles = StyleSheet.create({
   qualityBadge: { fontSize: 10, fontWeight: FontWeights.bold, color: Colors.primary, backgroundColor: 'rgba(229, 9, 20, 0.1)', paddingHorizontal: 4, borderRadius: 2 },
   fileSize: { fontSize: FontSizes.xs, color: Colors.text.muted },
   downloadDate: { fontSize: FontSizes.xs, color: Colors.text.muted },
+  tabSwitcher: { flexDirection: 'row', marginHorizontal: Spacing.lg, marginBottom: Spacing.md, backgroundColor: Colors.card, borderRadius: BorderRadius.md, padding: 3 },
+  tab: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, paddingVertical: Spacing.sm, borderRadius: BorderRadius.sm },
+  tabActive: { backgroundColor: Colors.tertiary },
+  tabText: { fontSize: FontSizes.sm, color: Colors.text.muted, fontWeight: FontWeights.medium },
+  tabTextActive: { color: Colors.text.primary, fontWeight: FontWeights.semibold },
+  tabBadge: { backgroundColor: Colors.primary, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center' },
+  tabBadgeText: { fontSize: 10, fontWeight: FontWeights.bold, color: '#fff' },
+  queueControls: { flexDirection: 'row', justifyContent: 'center', gap: Spacing.md, marginHorizontal: Spacing.lg, marginBottom: Spacing.md },
+  queueControlBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.card, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border },
+  queueControlText: { fontSize: FontSizes.sm, color: Colors.text.secondary, fontWeight: FontWeights.medium },
+  queueActions: { justifyContent: 'center', alignItems: 'center', gap: Spacing.xs, paddingHorizontal: Spacing.sm },
+  queueActionBtn: { padding: Spacing.xs },
+  progressCircle: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)' },
+  progressCircleText: { fontSize: FontSizes.xs, fontWeight: FontWeights.bold, color: '#fff' },
+  queueProgressTrack: { height: 4, backgroundColor: Colors.tertiary, borderRadius: 2, overflow: 'hidden', marginTop: Spacing.xs },
+  queueProgressFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 2 },
   removeBtn: { padding: Spacing.md },
 });

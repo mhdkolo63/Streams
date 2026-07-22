@@ -11,6 +11,11 @@ import {
   Bookmark,
   WifiOff,
   AlertCircle,
+  Users,
+  ListVideo,
+  MessageSquare,
+  Zap,
+  Play,
 } from 'lucide-react-native';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
 import { Button } from './Button';
@@ -21,6 +26,11 @@ type EmptyStateType =
   | 'notifications'
   | 'search'
   | 'videos'
+  | 'shorts'
+  | 'subscribers'
+  | 'playlists'
+  | 'posts'
+  | 'comments'
   | 'continue-watching'
   | 'category'
   | 'network'
@@ -67,6 +77,31 @@ const defaultContent: Record<EmptyStateType, { icon: React.ReactNode; title: str
     title: 'No videos available',
     message: 'Check back later for new content.',
   },
+  shorts: {
+    icon: <Zap size={64} color={Colors.primary} />,
+    title: 'No shorts yet',
+    message: 'Short videos will appear here once uploaded.',
+  },
+  subscribers: {
+    icon: <Users size={64} color={Colors.text.muted} />,
+    title: 'No subscribers yet',
+    message: 'Share your channel to start gaining subscribers.',
+  },
+  playlists: {
+    icon: <ListVideo size={64} color={Colors.text.muted} />,
+    title: 'No playlists yet',
+    message: 'Create a playlist to organize your favorite videos.',
+  },
+  posts: {
+    icon: <MessageSquare size={64} color={Colors.text.muted} />,
+    title: 'No posts yet',
+    message: 'Community posts will appear here once created.',
+  },
+  comments: {
+    icon: <MessageSquare size={64} color={Colors.text.muted} />,
+    title: 'No comments yet',
+    message: 'Be the first to start the conversation.',
+  },
   'continue-watching': {
     icon: <Play size={64} color={Colors.primary} />,
     title: 'Nothing to continue',
@@ -97,10 +132,6 @@ const defaultContent: Record<EmptyStateType, { icon: React.ReactNode; title: str
     message: '',
   },
 };
-
-function Play({ size, color }: { size: number; color: string }) {
-  return <Film size={size} color={color} />;
-}
 
 export function EmptyState({
   type,

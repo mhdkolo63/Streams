@@ -17,10 +17,11 @@ import { useRouter } from 'expo-router';
 import {
   Search, X, TrendingUp, Film, Clock, ChevronRight, Flame, Star,
   Sparkles, Trash2, SlidersHorizontal, ChevronDown, ChevronUp, Eye,
-  Calendar, Play, ArrowUpDown, Check,
+  Calendar, Play, ArrowUpDown, Check, CheckCircle2, ListVideo,
+  Mic, Hash, User as UserIcon, ArrowUpRight,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, SlideInRight } from 'react-native-reanimated';
-import { supabase, Video, Category } from '@/lib/supabase';
+import { supabase, Video, Category, Profile, Playlist } from '@/lib/supabase';
 import { VideoCard } from '@/components/VideoCard';
 import { VideoCardSkeleton } from '@/components/Skeleton';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
@@ -72,6 +73,8 @@ export default function SearchScreen() {
   const [featuredVideos, setFeaturedVideos] = useState<Video[]>([]);
   const [recentVideos, setRecentVideos] = useState<Video[]>([]);
   const [trendingSearches, setTrendingSearches] = useState<string[]>([]);
+  const [channelResults, setChannelResults] = useState<Profile[]>([]);
+  const [playlistResults, setPlaylistResults] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -81,6 +84,8 @@ export default function SearchScreen() {
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
   const [hasSearched, setHasSearched] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const [voiceSearchActive, setVoiceSearchActive] = useState(false);
+  const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -271,6 +276,20 @@ export default function SearchScreen() {
         }
 
         let dbQuery = supabase.from('videos').select('*').eq('status', 'published').eq('is_short', false);
+
+        // Search channels/creators and playlists in parallel
+        if (searchQuery.trim()) {
+          const sq = searchQuery.trim();
+          const [channelsRes, playlistsRes] = await Promise.all([
+            supabase.from('profiles').select('*').or(`full_name.ilike.%${sq}%,username.ilike.%${sq}%`).limit(5),
+            supabase.from('playlists').select('*').ilike('title', `%${sq}%`).limit(5),
+          ]);
+          setChannelResults((channelsRes.data as Profile[]) || []);
+          setPlaylistResults((playlistsRes.data as Playlist[]) || []);
+        } else {
+          setChannelResults([]);
+          setPlaylistResults([]);
+        }
 
         // Text search across multiple fields
         if (searchQuery.trim()) {
@@ -493,6 +512,7 @@ export default function SearchScreen() {
             <X size={18} color={Colors.text.muted} />
           </TouchableOpacity>
         )}
+        {renderVoiceSearchButton()}
         <TouchableOpacity
           style={[styles.filterButton, activeFilterCount > 0 && styles.filterButtonActive]}
           onPress={() => setShowFilters(!showFilters)}
@@ -850,6 +870,138 @@ export default function SearchScreen() {
     </Animated.View>
   );
 
+  const renderChannelResults = () => {
+    if (channelResults.length === 0) return null;
+    return (
+      <Animated.View entering={FadeIn.duration(300)} style={styles.section}>
+        <Text style={styles.sectionTitle}>Channels & Creators</Text>
+        {channelResults.map((creator, i) => (
+          <TouchableOpacity
+            key={creator.id}
+            style={styles.channelResultRow}
+            onPress={() => router.push(`/channel?creatorId=${creator.id}`)}
+          >
+            <View style={styles.channelResultAvatar}>
+              {creator.avatar_url ? (
+                <Image source={{ uri: creator.avatar_url }} style={styles.channelResultAvatarImg} />
+              ) : (
+                <View style={styles.channelResultAvatarPlaceholder}>
+                  <Text style={styles.channelResultAvatarText}>
+                    {(creator.full_name || 'U').charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.channelResultInfo}>
+              <Text style={styles.channelResultName} numberOfLines={1}>{creator.full_name || 'Unknown'}</Text>
+              <Text style={styles.channelResultSubs} numberOfLines={1}>@{creator.username || 'creator'}</Text>
+            </View>
+            {creator.verified && <CheckCircle2 size={16} color={Colors.primary} fill={Colors.primary} />}
+          </TouchableOpacity>
+        ))}
+      </Animated.View>
+    );
+  };
+
+  const renderPlaylistResults = () => {
+    if (playlistResults.length === 0) return null;
+    return (
+      <Animated.View entering={FadeIn.duration(300)} style={styles.section}>
+        <Text style={styles.sectionTitle}>Playlists</Text>
+        {playlistResults.map((pl, i) => (
+          <TouchableOpacity
+            key={pl.id}
+            style={styles.playlistResultRow}
+            onPress={() => router.push(`/video/${pl.id}`)}
+          >
+            <View style={styles.playlistResultIcon}>
+              <ListVideo size={24} color={Colors.text.muted} />
+            </View>
+            <View style={styles.playlistResultInfo}>
+              <Text style={styles.playlistResultTitle} numberOfLines={1}>{pl.title}</Text>
+              <Text style={styles.playlistResultMeta}>{pl.video_count || 0} videos</Text>
+            </View>
+            <ChevronRight size={18} color={Colors.text.muted} />
+          </TouchableOpacity>
+        ))}
+      </Animated.View>
+    );
+  };
+
+  // Generate text suggestions based on current query
+  useEffect(() => {
+    if (!query.trim() || hasSearched) {
+      setTextSuggestions([]);
+      return;
+    }
+    const q = query.toLowerCase().trim();
+    const allSuggestions = [
+      ...trendingSearches,
+      ...recentSearches,
+      'music videos', 'gaming highlights', 'tech reviews', 'cooking tutorials',
+      'travel vlogs', 'fitness tips', 'movie trailers', 'comedy shorts',
+    ];
+    const filtered = allSuggestions
+      .filter(s => s.toLowerCase().includes(q) && s.toLowerCase() !== q)
+      .slice(0, 5);
+    setTextSuggestions(filtered);
+  }, [query, hasSearched, trendingSearches, recentSearches]);
+
+  const renderTextSuggestions = () => {
+    if (textSuggestions.length === 0 || hasSearched) return null;
+    return (
+      <Animated.View entering={FadeIn.duration(200)} style={styles.textSuggestionsContainer}>
+        {textSuggestions.map((suggestion, i) => (
+          <TouchableOpacity
+            key={i}
+            style={styles.textSuggestionRow}
+            onPress={() => {
+              setQuery(suggestion);
+              performSearch(suggestion, filters, sortBy);
+            }}
+          >
+            <Search size={16} color={Colors.text.muted} />
+            <Text style={styles.textSuggestionText}>{suggestion}</Text>
+            <ArrowUpRight size={14} color={Colors.text.muted} />
+          </TouchableOpacity>
+        ))}
+      </Animated.View>
+    );
+  };
+
+  const renderSearchByType = () => (
+    <View style={styles.searchTypeChips}>
+      <TouchableOpacity style={styles.searchTypeChip} onPress={() => setQuery('#')}>
+        <Hash size={14} color={Colors.text.secondary} />
+        <Text style={styles.searchTypeText}>Hashtag</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.searchTypeChip} onPress={() => setQuery('@')}>
+        <UserIcon size={14} color={Colors.text.secondary} />
+        <Text style={styles.searchTypeText}>Creator</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.searchTypeChip} onPress={() => setQuery('category:')}>
+        <Film size={14} color={Colors.text.secondary} />
+        <Text style={styles.searchTypeText}>Category</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderVoiceSearchButton = () => (
+    <TouchableOpacity
+      style={styles.voiceBtn}
+      onPress={() => {
+        setVoiceSearchActive(!voiceSearchActive);
+        if (!voiceSearchActive) {
+          setTimeout(() => setVoiceSearchActive(false), 2000);
+        }
+      }}
+      accessibilityLabel="Voice search"
+      accessibilityRole="button"
+    >
+      <Mic size={22} color={voiceSearchActive ? Colors.primary : Colors.text.secondary} />
+    </TouchableOpacity>
+  );
+
   const renderEmptyState = () => (
     <View style={styles.emptyStateContainer}>
       <View style={styles.emptyStateIcon}>
@@ -992,7 +1144,15 @@ export default function SearchScreen() {
       >
         {renderRecentSearches()}
         {renderTrendingSearches()}
-        {hasSearched || query.trim() ? renderSearchResults() : renderBrowseContent()}
+        {renderTextSuggestions()}
+        {renderSearchByType()}
+        {hasSearched || query.trim() ? (
+          <>
+            {renderChannelResults()}
+            {renderPlaylistResults()}
+            {renderSearchResults()}
+          </>
+        ) : renderBrowseContent()}
       </ScrollView>
     </View>
   );
@@ -1185,4 +1345,24 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.full, borderWidth: 1, borderColor: Colors.border,
   },
   emptyCategoryText: { fontSize: FontSizes.sm, color: Colors.text.secondary, fontWeight: FontWeights.medium },
+  channelResultRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, marginBottom: Spacing.xs },
+  channelResultAvatar: { width: 48, height: 48, borderRadius: 24, overflow: 'hidden', backgroundColor: Colors.tertiary },
+  channelResultAvatarImg: { width: '100%', height: '100%' },
+  channelResultAvatarPlaceholder: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
+  channelResultAvatarText: { fontSize: FontSizes.lg, fontWeight: FontWeights.bold, color: Colors.text.primary },
+  channelResultInfo: { flex: 1 },
+  channelResultName: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text.primary },
+  channelResultSubs: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: 2 },
+  playlistResultRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, marginBottom: Spacing.xs },
+  playlistResultIcon: { width: 48, height: 48, borderRadius: BorderRadius.md, backgroundColor: Colors.tertiary, justifyContent: 'center', alignItems: 'center' },
+  playlistResultInfo: { flex: 1 },
+  playlistResultTitle: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text.primary },
+  playlistResultMeta: { fontSize: FontSizes.sm, color: Colors.text.muted, marginTop: 2 },
+  voiceBtn: { padding: Spacing.xs },
+  searchTypeChips: { flexDirection: 'row', paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginBottom: Spacing.md },
+  searchTypeChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.card, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, borderRadius: BorderRadius.full, borderWidth: 1, borderColor: Colors.border },
+  searchTypeText: { fontSize: FontSizes.sm, color: Colors.text.secondary, fontWeight: FontWeights.medium },
+  textSuggestionsContainer: { marginHorizontal: Spacing.lg, backgroundColor: Colors.card, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border, marginBottom: Spacing.md, overflow: 'hidden' },
+  textSuggestionRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  textSuggestionText: { flex: 1, fontSize: FontSizes.md, color: Colors.text.primary },
 });

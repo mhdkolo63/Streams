@@ -26,6 +26,7 @@ import {
   Zap,
   Radio,
   DollarSign,
+  BarChart3,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useAuth } from '@/contexts/AuthContext';
@@ -195,6 +196,23 @@ export default function StudioDashboard() {
             </View>
           </Animated.View>
 
+          {/* Views Chart */}
+          <Animated.View entering={FadeInDown.delay(150).duration(300)}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Views Overview</Text>
+            </View>
+            <View style={styles.chartContainer}>
+              <View style={styles.chartBars}>
+                {[40, 65, 45, 80, 55, 90, 70].map((h, i) => (
+                  <View key={i} style={styles.chartBarWrap}>
+                    <View style={[styles.chartBar, { height: `${h}%` }]} />
+                    <Text style={styles.chartDayLabel}>{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i]}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </Animated.View>
+
           {/* Recent Activity */}
           <Animated.View entering={FadeInDown.delay(200).duration(300)}>
             <View style={styles.sectionHeader}>
@@ -310,6 +328,11 @@ const styles = StyleSheet.create({
   quickActionLabel: { fontSize: FontSizes.xs, color: Colors.text.secondary, textAlign: 'center', fontWeight: FontWeights.medium },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
   sectionTitle: { fontSize: FontSizes.lg, fontWeight: FontWeights.bold, color: Colors.text.primary },
+  chartContainer: { backgroundColor: Colors.card, borderRadius: BorderRadius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border },
+  chartBars: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 120, gap: Spacing.xs },
+  chartBarWrap: { flex: 1, alignItems: 'center', gap: 4 },
+  chartBar: { width: '80%', backgroundColor: Colors.primary, borderRadius: BorderRadius.sm, minHeight: 4 },
+  chartDayLabel: { fontSize: FontSizes.xs, color: Colors.text.muted },
   viewAll: { fontSize: FontSizes.sm, color: Colors.primary, fontWeight: FontWeights.semibold },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginBottom: Spacing.xl },
   statCard: {

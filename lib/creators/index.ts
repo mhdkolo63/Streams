@@ -10,6 +10,7 @@ export * from './shorts';
 export * from './subscriptions';
 export * from './comments';
 export * from './playlists';
+export * from './community';
 export * from './moderation';
 export * from './uploads';
 

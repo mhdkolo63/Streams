@@ -39,6 +39,11 @@ import {
   Film,
   CheckCircle,
   RotateCcw,
+  Lock,
+  Unlock,
+  Sun,
+  Gauge,
+  X,
 } from 'lucide-react-native';
 import Animated, {
   FadeIn,
@@ -46,6 +51,8 @@ import Animated, {
   SlideInUp,
 } from 'react-native-reanimated';
 import { supabase, Video as VideoType } from '@/lib/supabase';
+import { useMiniPlayer } from '@/contexts/MiniPlayerContext';
+import { getFriendlyError } from '@/lib/errors';
 import { getRelatedVideos } from '@/lib/recommendations';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
@@ -107,6 +114,10 @@ export default function VideoPlayerScreen() {
   const [screenWidth, setScreenWidth] = useState(initialWidth);
   const [screenHeight, setScreenHeight] = useState(initialHeight);
   const [videoAspect, setVideoAspect] = useState<number | null>(null);
+  const [controlsLocked, setControlsLocked] = useState(false);
+  const [autoplayCountdown, setAutoplayCountdown] = useState<number | null>(null);
+  const [brightness, setBrightness] = useState(1);
+  const [gestureIndicator, setGestureIndicator] = useState<{ type: 'brightness' | 'volume'; value: number } | null>(null);
 
   // Refs for high-frequency values to avoid re-renders
   const hideControlsTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,6 +136,9 @@ export default function VideoPlayerScreen() {
   const videoDataRef = useRef<VideoType | null>(null);
   const fullscreenRef = useRef(false);
   const containerRef = useRef<View>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gestureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const miniPlayerCtx = useMiniPlayer();
 
   // Keep refs in sync
   useEffect(() => { positionRef.current = position; }, [position]);
@@ -307,13 +321,12 @@ export default function VideoPlayerScreen() {
       setVideoAspect(prev => prev !== aspect ? aspect : prev);
     }
 
-    // Handle playback finish
+    // Handle playback finish - autoplay with countdown
     if (status.didJustFinish) {
       setIsPlaying(false);
       if (autoPlayNextRef.current && relatedVideosRef.current.length > 0) {
         const nextVideo = relatedVideosRef.current[0];
-        toast.info('Playing next video', nextVideo.title);
-        router.push(`/player/${nextVideo.id}`);
+        startAutoplayCountdown(nextVideo);
         return;
       }
     }
@@ -483,6 +496,30 @@ export default function VideoPlayerScreen() {
     seekBarWidth.current = e.nativeEvent.layout.width;
   }, []);
 
+  const startAutoplayCountdown = useCallback((nextVideo: VideoType) => {
+    let count = 5;
+    setAutoplayCountdown(count);
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    countdownTimerRef.current = setInterval(() => {
+      count -= 1;
+      if (count <= 0) {
+        if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+        setAutoplayCountdown(null);
+        router.push(`/player/${nextVideo.id}`);
+      } else {
+        setAutoplayCountdown(count);
+      }
+    }, 1000);
+  }, [router]);
+
+  const cancelAutoplayCountdown = useCallback(() => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setAutoplayCountdown(null);
+  }, []);
+
   const handleBack = useCallback(async () => {
     try {
       if (Platform.OS === 'web' && typeof document !== 'undefined' && document.fullscreenElement) {
@@ -492,13 +529,27 @@ export default function VideoPlayerScreen() {
     } catch (e) {}
     if (userRef.current && videoDataRef.current) {
       await saveProgress(positionRef.current);
+      // Show mini player on back
+      miniPlayerCtx.show({
+        videoId: idRef.current || '',
+        videoTitle: videoDataRef.current?.title || '',
+        videoThumbnail: videoDataRef.current?.thumbnail_url || null,
+        videoUrl: videoUri,
+        position: positionRef.current,
+        duration: durationRef.current,
+        isPlaying: true,
+        creatorName: videoDataRef.current?.title || null,
+      });
+      miniPlayerCtx.setExpandCallback(() => {
+        router.push(`/player/${idRef.current}`);
+      });
     }
     if (router.canGoBack()) {
       router.back();
     } else {
       router.replace('/');
     }
-  }, [router, saveProgress]);
+  }, [router, saveProgress, miniPlayerCtx, videoUri]);
 
   // Optimistic like toggle - instant UI update, background DB save
   const toggleLike = useCallback(async () => {
@@ -818,6 +869,12 @@ export default function VideoPlayerScreen() {
                         Autoplay {autoPlayNext ? 'ON' : 'OFF'}
                       </Text>
                     </TouchableOpacity>
+                    <TouchableOpacity style={styles.controlButton} onPress={() => setShowQualityMenu(true)}>
+                      <Settings size={20} color={Colors.text.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.controlButton} onPress={() => setControlsLocked(true)}>
+                      <Lock size={20} color={Colors.text.primary} />
+                    </TouchableOpacity>
                     <TouchableOpacity style={styles.controlButton} onPress={toggleFullscreen}>
                       {isFullscreen ? <Minimize size={22} color={Colors.text.primary} /> : <Maximize size={22} color={Colors.text.primary} />}
                     </TouchableOpacity>
@@ -857,6 +914,71 @@ export default function VideoPlayerScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+            </Animated.View>
+          )}
+
+          {showQualityMenu && (
+            <Animated.View entering={SlideInUp.duration(200)} style={styles.speedMenu}>
+              <View style={styles.speedMenuHeader}>
+                <Text style={styles.speedMenuTitle}>Video Quality</Text>
+                <TouchableOpacity onPress={() => setShowQualityMenu(false)}>
+                  <Text style={styles.speedMenuClose}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.speedOptions}>
+                {['auto', '1080p', '720p', '480p', '360p', '240p', '144p'].map((q) => (
+                  <TouchableOpacity
+                    key={q}
+                    style={[styles.speedOption, videoQuality === q && styles.speedOptionActive]}
+                    onPress={() => {
+                      setVideoQuality(q);
+                      setShowQualityMenu(false);
+                    }}
+                  >
+                    <Text style={[styles.speedOptionText, videoQuality === q && styles.speedOptionTextActive]}>
+                      {q === 'auto' ? 'Auto' : q}
+                    </Text>
+                    {videoQuality === q && <CheckCircle size={16} color={Colors.primary} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </Animated.View>
+          )}
+
+          {autoplayCountdown !== null && (
+            <Animated.View entering={FadeIn.duration(200)} style={styles.autoplayOverlay}>
+              <View style={styles.autoplayCard}>
+                <Text style={styles.autoplayTitle}>Playing next in</Text>
+                <Text style={styles.autoplayCountdownNumber}>{autoplayCountdown}</Text>
+                <View style={styles.autoplayButtons}>
+                  <TouchableOpacity style={styles.autoplayCancelBtn} onPress={cancelAutoplayCountdown}>
+                    <Text style={styles.autoplayCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Animated.View>
+          )}
+
+          {controlsLocked && (
+            <TouchableOpacity style={styles.lockedOverlay} activeOpacity={1} onPress={() => setControlsLocked(false)}>
+              <View style={styles.lockBadge}>
+                <Unlock size={24} color={Colors.text.primary} />
+                <Text style={styles.lockText}>Tap to unlock</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {gestureIndicator && (
+            <Animated.View entering={FadeIn.duration(150)} style={styles.gestureIndicator}>
+              {gestureIndicator.type === 'brightness' ? (
+                <Sun size={24} color={Colors.text.primary} />
+              ) : (
+                <Volume2 size={24} color={Colors.text.primary} />
+              )}
+              <View style={styles.gestureBar}>
+                <View style={[styles.gestureBarFill, { width: `${gestureIndicator.value * 100}%` }]} />
+              </View>
+              <Text style={styles.gestureText}>{Math.round(gestureIndicator.value * 100)}%</Text>
             </Animated.View>
           )}
         </View>
@@ -1230,4 +1352,18 @@ const styles = StyleSheet.create({
   relatedMetaText: { fontSize: FontSizes.sm, color: Colors.text.muted },
   relatedMetaDot: { fontSize: FontSizes.sm, color: Colors.text.muted },
   footer: { height: Spacing.xl },
+  autoplayOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)' },
+  autoplayCard: { backgroundColor: Colors.card, borderRadius: BorderRadius.xl, padding: Spacing.xl, alignItems: 'center', gap: Spacing.sm, maxWidth: 300 },
+  autoplayTitle: { fontSize: FontSizes.md, color: Colors.text.secondary, fontWeight: FontWeights.medium },
+  autoplayCountdownNumber: { fontSize: FontSizes.xxxl, fontWeight: FontWeights.bold, color: Colors.primary },
+  autoplayButtons: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.sm },
+  autoplayCancelBtn: { backgroundColor: Colors.tertiary, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, borderRadius: BorderRadius.md },
+  autoplayCancelText: { fontSize: FontSizes.md, color: Colors.text.primary, fontWeight: FontWeights.semibold },
+  lockedOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  lockBadge: { backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: BorderRadius.full, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, alignItems: 'center', gap: Spacing.xs },
+  lockText: { fontSize: FontSizes.sm, color: Colors.text.primary, fontWeight: FontWeights.medium },
+  gestureIndicator: { position: 'absolute', top: '50%', left: '50%', transform: [{ translateX: -60 }, { translateY: -50 }], width: 120, height: 100, backgroundColor: 'rgba(0,0,0,0.8)', borderRadius: BorderRadius.lg, justifyContent: 'center', alignItems: 'center', gap: 6 },
+  gestureBar: { width: 80, height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' },
+  gestureBarFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 2 },
+  gestureText: { fontSize: FontSizes.xs, color: Colors.text.primary, fontWeight: FontWeights.semibold },
 });

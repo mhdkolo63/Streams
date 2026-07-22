@@ -31,6 +31,14 @@ export default function EditProfileScreen() {
   const [username, setUsername] = useState(profile?.username || '');
   const [email, setEmail] = useState(profile?.email || '');
   const [phone, setPhone] = useState(profile?.phone || '');
+  const [bio, setBio] = useState(profile?.bio || '');
+  const [country, setCountry] = useState(profile?.country || '');
+  const [language, setLanguage] = useState(profile?.language || 'English');
+  const [dateOfBirth, setDateOfBirth] = useState(profile?.date_of_birth || '');
+  const [gender, setGender] = useState(profile?.gender || '');
+  const [coverUrl, setCoverUrl] = useState<string | null>(profile?.banner_url || profile?.cover_url || null);
+  const [coverFile, setCoverFile] = useState<any>(null);
+  const [coverRemoved, setCoverRemoved] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(profile?.avatar_url || null);
   const [avatarFile, setAvatarFile] = useState<any>(null);
   const [avatarRemoved, setAvatarRemoved] = useState(false);
@@ -45,9 +53,17 @@ export default function EditProfileScreen() {
       setUsername(profile.username || '');
       setEmail(profile.email || '');
       setPhone(profile.phone || '');
+      setBio(profile.bio || '');
+      setCountry(profile.country || '');
+      setLanguage(profile.language || 'English');
+      setDateOfBirth(profile.date_of_birth || '');
+      setGender(profile.gender || '');
+      setCoverUrl(profile.banner_url || profile.cover_url || null);
       setAvatarUrl(profile.avatar_url || null);
       setAvatarRemoved(false);
       setAvatarFile(null);
+      setCoverRemoved(false);
+      setCoverFile(null);
     }
   }, [profile]);
 
@@ -81,6 +97,51 @@ export default function EditProfileScreen() {
     } catch (err) {
       console.error('Error picking avatar:', err);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
+    }
+  };
+
+  const pickCover = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        setError('Please grant photo library permissions to upload a cover photo.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        allowsEditing: true,
+        aspect: [16, 9],
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setCoverFile(result.assets[0]);
+        setCoverUrl(result.assets[0].uri);
+        setCoverRemoved(false);
+      }
+    } catch (err) {
+      setError('Failed to pick cover image.');
+    }
+  };
+
+  const removeCover = () => {
+    setCoverFile(null);
+    setCoverUrl(null);
+    setCoverRemoved(true);
+  };
+
+  const uploadCover = async (): Promise<string | null> => {
+    if (!coverFile || !user) return null;
+    try {
+      const rawExt = (coverFile.mimeType?.split('/')[1] || coverFile.uri?.split('.').pop() || 'jpg').toLowerCase();
+      const safeExt = sanitizeFilename(rawExt);
+      const contentType = getImageMime(rawExt);
+      const filePath = `${user.id}/${user.id}_cover_${Date.now()}.${safeExt}`;
+      const response = await fetch(coverFile.uri);
+      const blob = await response.blob();
+      const result = await uploadWithProgress('cover-images', filePath, blob, contentType, () => {}, true, 2);
+      return result.publicUrl;
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to upload cover photo');
     }
   };
 
@@ -191,7 +252,27 @@ export default function EditProfileScreen() {
         full_name: sanitizeString(fullName, 50),
         username: sanitizeString(username, 20) || null,
         phone: phone.trim() || null,
+        bio: sanitizeString(bio, 500) || null,
+        country: sanitizeString(country, 50) || null,
+        language: sanitizeString(language, 30) || null,
+        date_of_birth: dateOfBirth.trim() || null,
+        gender: gender.trim() || null,
       };
+
+      if (coverFile) {
+        try {
+          const newCoverUrl = await uploadCover();
+          if (newCoverUrl) {
+            updates.banner_url = `${newCoverUrl}?t=${Date.now()}`;
+          }
+        } catch (coverErr: any) {
+          setError(coverErr.message || 'Failed to upload cover photo');
+          setLoading(false);
+          return;
+        }
+      } else if (coverRemoved && (profile?.banner_url || profile?.cover_url)) {
+        updates.banner_url = null;
+      }
 
       // Handle avatar changes
       if (avatarFile) {
@@ -264,6 +345,24 @@ export default function EditProfileScreen() {
 
           <Text style={styles.title}>Edit Profile</Text>
           <Text style={styles.subtitle}>Update your personal information and profile picture</Text>
+
+          <View style={styles.coverSection}>
+            <View style={styles.coverContainer}>
+              {coverUrl ? (
+                <Image source={{ uri: coverUrl, cache: 'reload' }} style={styles.cover} />
+              ) : (
+                <View style={[styles.cover, styles.coverPlaceholder]} />
+              )}
+              <TouchableOpacity style={styles.coverEditBtn} onPress={pickCover}>
+                <Camera size={18} color={Colors.text.primary} />
+              </TouchableOpacity>
+              {coverUrl && (
+                <TouchableOpacity style={styles.coverRemoveBtn} onPress={removeCover}>
+                  <Trash2 size={16} color={Colors.status.error} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
 
           <View style={styles.avatarSection}>
             <View style={styles.avatarContainer}>
@@ -357,6 +456,46 @@ export default function EditProfileScreen() {
               leftIcon={<Phone size={20} color={Colors.text.muted} />}
             />
 
+            <Input
+              label="Bio"
+              value={bio}
+              onChangeText={setBio}
+              placeholder="Tell viewers about yourself"
+              multiline
+            />
+
+            <Input
+              label="Country"
+              value={country}
+              onChangeText={setCountry}
+              placeholder="e.g. United States"
+              autoCapitalize="words"
+            />
+
+            <Input
+              label="Language"
+              value={language}
+              onChangeText={setLanguage}
+              placeholder="e.g. English"
+              autoCapitalize="words"
+            />
+
+            <Input
+              label="Date of Birth"
+              value={dateOfBirth}
+              onChangeText={setDateOfBirth}
+              placeholder="YYYY-MM-DD"
+              autoCapitalize="none"
+            />
+
+            <Input
+              label="Gender (optional)"
+              value={gender}
+              onChangeText={setGender}
+              placeholder="e.g. Male, Female, Other"
+              autoCapitalize="words"
+            />
+
             <Button
               title={loading ? 'Saving...' : 'Save Changes'}
               onPress={handleSave}
@@ -402,6 +541,12 @@ const styles = StyleSheet.create({
     color: Colors.text.secondary,
     marginBottom: Spacing.xl,
   },
+  coverSection: { marginBottom: Spacing.md },
+  coverContainer: { position: 'relative', height: 180, borderRadius: BorderRadius.lg, overflow: 'hidden', backgroundColor: Colors.tertiary },
+  cover: { width: '100%', height: '100%' },
+  coverPlaceholder: { backgroundColor: '#1a1a2e' },
+  coverEditBtn: { position: 'absolute', bottom: Spacing.sm, right: Spacing.sm, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
+  coverRemoveBtn: { position: 'absolute', top: Spacing.sm, right: Spacing.sm, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   avatarSection: {
     alignItems: 'center',
     marginBottom: Spacing.xl,

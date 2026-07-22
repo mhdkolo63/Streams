@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
@@ -21,12 +22,15 @@ import {
   CheckCircle,
   X,
   AlertTriangle,
+  Search,
+  SearchX,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp, SlideOutRight, Layout } from 'react-native-reanimated';
 import { supabase, Video, WatchHistory } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/Button';
+import { Input } from '@/components/Input';
 import { EmptyState, EmptyHistory } from '@/components/EmptyState';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
 
@@ -41,6 +45,8 @@ export default function HistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
 
   const fetchHistory = useCallback(async () => {
     if (!user) {
@@ -153,11 +159,30 @@ export default function HistoryScreen() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
+  // Filter by search query
+  const filteredHistory = useMemo(() => {
+    if (!searchQuery.trim()) return watchHistory;
+    const q = searchQuery.toLowerCase();
+    return watchHistory.filter(
+      (item) =>
+        item.video?.title?.toLowerCase().includes(q)
+    );
+  }, [watchHistory, searchQuery]);
+
+  // Continue watching: in-progress videos (< 95% watched, > 0% watched)
+  const continueWatching = useMemo(() => {
+    return watchHistory.filter((item) => {
+      if (!item.video) return false;
+      const progress = item.video.duration > 0 ? (item.progress / item.video.duration) * 100 : 0;
+      return progress > 0 && progress < 95 && !item.completed;
+    }).slice(0, 5);
+  }, [watchHistory]);
+
   // Group history by date
   const groupedHistory = useMemo(() => {
     const groups: { [key: string]: (WatchHistory & { video?: Video })[] } = {};
 
-    watchHistory.forEach((item) => {
+    filteredHistory.forEach((item) => {
       const date = new Date(item.last_watched_at);
       const now = new Date();
       const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
@@ -252,14 +277,81 @@ export default function HistoryScreen() {
           <Text style={styles.title}>Watch History</Text>
           <Text style={styles.count}>{watchHistory.length} videos</Text>
         </View>
-        <TouchableOpacity
-          style={styles.clearButton}
-          onPress={handleClearAll}
-        >
-          <Trash2 size={18} color={Colors.status.error} />
-          <Text style={styles.clearButtonText}>Clear All</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setShowSearch(!showSearch)}>
+            {showSearch ? <X size={18} color={Colors.text.secondary} /> : <Search size={18} color={Colors.text.secondary} />}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.clearButton} onPress={handleClearAll}>
+            <Trash2 size={18} color={Colors.status.error} />
+            <Text style={styles.clearButtonText}>Clear All</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {showSearch && (
+        <Animated.View entering={FadeInDown.duration(200)} style={styles.searchContainer}>
+          <Input
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search your history..."
+            leftIcon={<Search size={18} color={Colors.text.muted} />}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </Animated.View>
+      )}
+
+      {/* Continue Watching Section */}
+      {continueWatching.length > 0 && !searchQuery.trim() && (
+        <Animated.View entering={FadeInDown.delay(50).duration(300)} style={styles.continueSection}>
+          <View style={styles.groupHeader}>
+            <Text style={styles.groupTitle}>Continue Watching</Text>
+            <Text style={styles.groupCount}>{continueWatching.length}</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.continueScroll}
+          >
+            {continueWatching.map((item) => {
+              const video = item.video;
+              if (!video) return null;
+              const progress = video.duration > 0 ? Math.min(100, (item.progress / video.duration) * 100) : 0;
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.continueCard}
+                  onPress={() => router.push(`/player/${video.id}`)}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.continueThumbnail}>
+                    <Image
+                      source={{ uri: video.thumbnail_url || 'https://images.unsplash.com/photo-1489594927165-fd5a049b6667?w=300&h=170&fit=crop' }}
+                      style={styles.thumbnail}
+                    />
+                    <View style={styles.progressContainer}>
+                      <View style={styles.progressBar}>
+                        <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                      </View>
+                    </View>
+                    <View style={styles.playOverlay}>
+                      <Play size={28} color={Colors.text.primary} fill={Colors.text.primary} />
+                    </View>
+                  </View>
+                  <Text style={styles.continueTitle} numberOfLines={2}>{video.title}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </Animated.View>
+      )}
+
+      {searchQuery.trim() && filteredHistory.length === 0 && (
+        <View style={styles.noSearchResults}>
+          <SearchX size={48} color={Colors.text.muted} />
+          <Text style={styles.noSearchText}>No results for "{searchQuery}"</Text>
+        </View>
+      )}
 
       {/* Clear Confirmation Modal */}
       {showClearConfirm && (
@@ -518,4 +610,14 @@ const styles = StyleSheet.create({
   },
   modalButtonDisabled: { opacity: 0.6 },
   modalConfirmText: { fontSize: FontSizes.md, fontWeight: FontWeights.semibold, color: Colors.text.primary },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  iconBtn: { padding: Spacing.sm },
+  searchContainer: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.md },
+  continueSection: { marginBottom: Spacing.lg },
+  continueScroll: { paddingHorizontal: Spacing.lg, gap: Spacing.md },
+  continueCard: { width: 200, gap: Spacing.xs },
+  continueThumbnail: { width: 200, height: 112, borderRadius: BorderRadius.md, overflow: 'hidden', position: 'relative', backgroundColor: Colors.card },
+  continueTitle: { fontSize: FontSizes.sm, fontWeight: FontWeights.semibold, color: Colors.text.primary, paddingHorizontal: Spacing.xs, lineHeight: 16 },
+  noSearchResults: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.md, paddingBottom: Spacing.xxl },
+  noSearchText: { fontSize: FontSizes.md, color: Colors.text.muted, textAlign: 'center' },
 });

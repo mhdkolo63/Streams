@@ -1,7 +1,3 @@
-/**
- * Comments service — full implementation for the video/short comments system.
- */
-
 import { supabase, Comment, Profile } from '@/lib/supabase';
 import { sanitizeString } from '@/lib/validation';
 
@@ -22,16 +18,12 @@ export async function getComments(
     .from('comments')
     .select('*, profiles:profiles!comments_user_id_fkey(*)')
     .eq('video_id', videoId)
-    .is('parent_id', null)
-    .order('created_at', { ascending: sort === 'newest' });
+    .is('parent_id', null);
 
   if (sort === 'top') {
-    query = supabase
-      .from('comments')
-      .select('*, profiles:profiles!comments_user_id_fkey(*)')
-      .eq('video_id', videoId)
-      .is('parent_id', null)
-      .order('like_count', { ascending: false });
+    query = query.order('is_pinned', { ascending: false }).order('like_count', { ascending: false });
+  } else {
+    query = query.order('is_pinned', { ascending: false }).order('created_at', { ascending: false });
   }
 
   const { data, error } = await query;
@@ -39,7 +31,6 @@ export async function getComments(
 
   const comments = data as unknown as CommentWithProfile[];
 
-  // Fetch replies for each comment
   const commentIds = comments.map((c) => c.id);
   if (commentIds.length > 0) {
     const { data: replies } = await supabase
@@ -61,7 +52,6 @@ export async function getComments(
     }
   }
 
-  // Check which comments the current user liked
   if (userId && comments.length > 0) {
     const allCommentIds = [
       ...commentIds,
@@ -111,6 +101,26 @@ export async function addComment(
   return data as unknown as CommentWithProfile;
 }
 
+export async function editComment(
+  commentId: string,
+  userId: string,
+  newBody: string
+): Promise<boolean> {
+  const sanitized = sanitizeString(newBody, 1000);
+  if (!sanitized.trim()) return false;
+
+  const { error } = await supabase
+    .from('comments')
+    .update({
+      body: sanitized,
+      edited_at: new Date().toISOString(),
+    })
+    .eq('id', commentId)
+    .eq('user_id', userId);
+
+  return !error;
+}
+
 export async function deleteComment(commentId: string, userId: string): Promise<boolean> {
   const { error } = await supabase
     .from('comments')
@@ -124,7 +134,6 @@ export async function toggleCommentLike(
   commentId: string,
   userId: string
 ): Promise<{ liked: boolean; likeCount: number }> {
-  // Check if already liked
   const { data: existing } = await supabase
     .from('comment_likes')
     .select('id')
@@ -133,24 +142,85 @@ export async function toggleCommentLike(
     .maybeSingle();
 
   if (existing) {
-    // Unlike
     await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', userId);
     const { data: updated } = await supabase
       .from('comments')
       .select('like_count')
       .eq('id', commentId)
       .maybeSingle();
-    return { liked: false, likeCount: (updated?.like_count || 1) - 1 };
-  } else {
-    // Like
-    await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: userId });
-    const { data: updated } = await supabase
-      .from('comments')
-      .select('like_count')
-      .eq('id', commentId)
-      .maybeSingle();
-    return { liked: true, likeCount: (updated?.like_count || 0) + 1 };
+    return { liked: false, likeCount: Math.max(0, (updated?.like_count || 1) - 1) };
   }
+
+  await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: userId });
+  const { data: updated } = await supabase
+    .from('comments')
+    .select('like_count')
+    .eq('id', commentId)
+    .maybeSingle();
+  return { liked: true, likeCount: (updated?.like_count || 0) + 1 };
+}
+
+export async function pinComment(commentId: string, videoOwnerId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('comments')
+    .update({ is_pinned: true, pinned_at: new Date().toISOString() })
+    .eq('id', commentId);
+
+  return !error;
+}
+
+export async function unpinComment(commentId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('comments')
+    .update({ is_pinned: false })
+    .eq('id', commentId);
+
+  return !error;
+}
+
+export async function heartComment(
+  commentId: string,
+  videoOwnerId: string
+): Promise<boolean> {
+  const { data: comment } = await supabase
+    .from('comments')
+    .select('is_hearted')
+    .eq('id', commentId)
+    .maybeSingle();
+
+  const { error } = await supabase
+    .from('comments')
+    .update({
+      is_hearted: !comment?.is_hearted,
+      hearted_by: !comment?.is_hearted ? videoOwnerId : null,
+      hearted_at: !comment?.is_hearted ? new Date().toISOString() : null,
+    })
+    .eq('id', commentId);
+
+  return !error;
+}
+
+export async function reportComment(
+  commentId: string,
+  reporterId: string,
+  reason: string
+): Promise<boolean> {
+  const { error } = await supabase
+    .from('comment_reports')
+    .insert({
+      comment_id: commentId,
+      reporter_id: reporterId,
+      reason: sanitizeString(reason, 500),
+    });
+
+  if (!error) {
+    await supabase
+      .from('comments')
+      .update({ is_reported: true })
+      .eq('id', commentId);
+  }
+
+  return !error;
 }
 
 export async function getCommentCount(videoId: string): Promise<number> {

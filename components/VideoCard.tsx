@@ -1,19 +1,23 @@
-import React, { memo, useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Pressable, Platform } from 'react-native';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, Platform, Dimensions, Modal, ScrollView } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
-  interpolate,
   FadeIn,
   ZoomIn,
   FadeOut,
+  SlideInRight,
 } from 'react-native-reanimated';
-import { Play, Eye, Clock, Film, Calendar, Heart, Lock, Crown } from 'lucide-react-native';
+import { Play, Eye, Clock, Film, Calendar, Heart, Lock, Crown, MoreVertical, Bookmark, Share2, Flag, CheckCircle2, Trash2 } from 'lucide-react-native';
 import { Colors, BorderRadius, FontSizes, FontWeights, Spacing } from '@/constants/theme';
-import { Video } from '@/lib/supabase';
+import { Video, Profile } from '@/lib/supabase';
 import { CachedImage } from '@/components/CachedImage';
+import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/components/Toast';
+import { toggleWatchLater, isInWatchLater } from '@/lib/creators';
+import { ShareSheet } from '@/components/ShareSheet';
 
 const { width } = Dimensions.get('window');
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -28,6 +32,10 @@ interface VideoCardProps {
   progress?: number;
   showDetails?: boolean;
   index?: number;
+  creator?: Profile | null;
+  showCreator?: boolean;
+  showMenu?: boolean;
+  onDelete?: () => void;
 }
 
 function VideoCardComponent({
@@ -38,10 +46,19 @@ function VideoCardComponent({
   progress,
   showDetails = true,
   index = 0,
+  creator,
+  showCreator = false,
+  showMenu = true,
+  onDelete,
 }: VideoCardProps) {
+  const { user } = useAuth();
+  const toast = useToast();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
   const [favAnimating, setFavAnimating] = useState(false);
+  const [inWatchLater, setInWatchLater] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const scale = useSharedValue(1);
   const overlayOpacity = useSharedValue(0);
   const favScale = useSharedValue(1);
@@ -94,10 +111,6 @@ function VideoCardComponent({
     }
   };
 
-  const imageAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: 1,
-  }));
-
   const hoverOverlayStyle = useAnimatedStyle(() => ({
     opacity: overlayOpacity.value,
   }));
@@ -125,6 +138,39 @@ function VideoCardComponent({
     return () => { if (favTimerRef.current) clearTimeout(favTimerRef.current); };
   }, []);
 
+  useEffect(() => {
+    if (user) {
+      isInWatchLater(user.id, video.id).then(setInWatchLater);
+    }
+  }, [user, video.id]);
+
+  const handleWatchLater = useCallback(async (e: any) => {
+    if (e?.stopPropagation) e.stopPropagation();
+    setMenuOpen(false);
+    if (!user) {
+      toast.info('Sign in required', 'Please sign in to save videos');
+      return;
+    }
+    const result = await toggleWatchLater(user.id, video.id);
+    setInWatchLater(result.added);
+    toast.success(result.added ? 'Saved to Watch Later' : 'Removed from Watch Later');
+  }, [user, video.id, toast]);
+
+  const handleShare = useCallback((e: any) => {
+    if (e?.stopPropagation) e.stopPropagation();
+    setMenuOpen(false);
+    setShowShare(true);
+  }, []);
+
+  const menuActions = [
+    { icon: Bookmark, label: inWatchLater ? 'Remove from Watch Later' : 'Save to Watch Later', onPress: handleWatchLater },
+    { icon: Share2, label: 'Share', onPress: handleShare },
+  ];
+
+  if (onDelete) {
+    menuActions.push({ icon: Trash2, label: 'Delete', onPress: (e: any) => { if (e?.stopPropagation) e.stopPropagation(); setMenuOpen(false); onDelete(); } });
+  }
+
   return (
     <Animated.View entering={FadeIn.delay(Math.min(index * 40, 300)).duration(400)}>
       <AnimatedPressable
@@ -144,7 +190,6 @@ function VideoCardComponent({
             resizeMode="cover"
           />
 
-          {/* Always-visible subtle overlay */}
           <Animated.View entering={ZoomIn.delay(100).duration(200)} style={styles.overlay}>
             <View style={styles.playButtonContainer}>
               <View style={styles.playButton}>
@@ -153,7 +198,6 @@ function VideoCardComponent({
             </View>
           </Animated.View>
 
-          {/* Hover overlay for web - shows larger play button + favorite */}
           {Platform.OS === 'web' && (
             <Animated.View style={[styles.hoverOverlay, hoverOverlayStyle]} pointerEvents="none">
               <View style={styles.hoverPlayButton}>
@@ -162,7 +206,6 @@ function VideoCardComponent({
             </Animated.View>
           )}
 
-          {/* Favorite button - top right */}
           <TouchableOpacity
             style={styles.favButton}
             onPress={handleFavoritePress}
@@ -178,12 +221,10 @@ function VideoCardComponent({
             </Animated.View>
           </TouchableOpacity>
 
-          {/* Duration badge */}
           <Animated.View entering={FadeIn.delay(150).duration(200)} style={styles.durationBadge}>
             <Text style={styles.durationText}>{duration}</Text>
           </Animated.View>
 
-          {/* Premium / Member-only badges */}
           {video.is_premium && (
             <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.premiumBadge}>
               <Crown size={10} color="#FFD700" />
@@ -206,7 +247,6 @@ function VideoCardComponent({
             </Animated.View>
           )}
 
-          {/* Progress bar for Continue Watching */}
           {showProgress && progress !== undefined && progress > 0 && (
             <View style={styles.progressContainer}>
               <View style={styles.progressBar}>
@@ -221,23 +261,16 @@ function VideoCardComponent({
             <Text style={styles.title} numberOfLines={2}>
               {video.title}
             </Text>
-            <View style={styles.metaRow}>
-              {video.genre && (
-                <View style={styles.metaItem}>
-                  <Film size={11} color={Colors.text.muted} />
-                  <Text style={styles.meta} numberOfLines={1}>{video.genre}</Text>
-                </View>
-              )}
-              {uploadDate && (
-                <>
-                  {video.genre && <Text style={styles.metaDot}>·</Text>}
-                  <View style={styles.metaItem}>
-                    <Calendar size={11} color={Colors.text.muted} />
-                    <Text style={styles.meta}>{uploadDate}</Text>
-                  </View>
-                </>
-              )}
-            </View>
+            {showCreator && creator && (
+              <View style={styles.creatorRow}>
+                <Text style={styles.creatorName} numberOfLines={1}>
+                  {creator.full_name || creator.username || 'Creator'}
+                </Text>
+                {creator.verified && (
+                  <CheckCircle2 size={12} color={Colors.primary} fill={Colors.primary} />
+                )}
+              </View>
+            )}
             <View style={styles.metaRow}>
               {video.views_count > 0 && (
                 <View style={styles.metaItem}>
@@ -245,24 +278,80 @@ function VideoCardComponent({
                   <Text style={styles.meta}>{viewsText} views</Text>
                 </View>
               )}
-              {video.duration > 0 && (
+              {uploadDate && (
                 <>
                   {video.views_count > 0 && <Text style={styles.metaDot}>·</Text>}
                   <View style={styles.metaItem}>
-                    <Clock size={11} color={Colors.text.muted} />
-                    <Text style={styles.meta}>{duration}</Text>
+                    <Calendar size={11} color={Colors.text.muted} />
+                    <Text style={styles.meta}>{uploadDate}</Text>
                   </View>
                 </>
               )}
             </View>
+            {video.duration > 0 && (
+              <View style={styles.metaRow}>
+                <View style={styles.metaItem}>
+                  <Clock size={11} color={Colors.text.muted} />
+                  <Text style={styles.meta}>{duration}</Text>
+                </View>
+                {video.genre && (
+                  <>
+                    <Text style={styles.metaDot}>·</Text>
+                    <View style={styles.metaItem}>
+                      <Film size={11} color={Colors.text.muted} />
+                      <Text style={styles.meta}>{video.genre}</Text>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
           </View>
         )}
       </AnimatedPressable>
+
+      {showMenu && (
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={(e) => { e?.stopPropagation?.(); setMenuOpen(!menuOpen); }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <MoreVertical size={18} color={Colors.text.muted} />
+        </TouchableOpacity>
+      )}
+
+      {menuOpen && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+          <Pressable style={styles.menuOverlay} onPress={() => setMenuOpen(false)}>
+            <View style={styles.menuSheet}>
+              {menuActions.map((action, i) => {
+                const Icon = action.icon;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.menuItem}
+                    onPress={action.onPress}
+                  >
+                    <Icon size={18} color={Colors.text.secondary} />
+                    <Text style={styles.menuItemText}>{action.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Modal>
+      )}
+
+      <ShareSheet
+        visible={showShare}
+        onClose={() => setShowShare(false)}
+        url={typeof window !== 'undefined' ? `${window.location.origin}/video/${video.id}` : `/video/${video.id}`}
+        title={video.title}
+      />
     </Animated.View>
   );
 }
 
-export const VideoCard = memo(VideoCardComponent);
+export const VideoCard = React.memo(VideoCardComponent);
 
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
@@ -289,10 +378,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: Colors.secondary,
     position: 'relative',
-  },
-  imagePlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.tertiary,
   },
   thumbnail: {
     width: '100%',
@@ -344,6 +429,18 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
+  },
+  menuButton: {
+    position: 'absolute',
+    top: Spacing.xs,
+    right: 38,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -450,6 +547,17 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     lineHeight: 18,
   },
+  creatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  creatorName: {
+    color: Colors.text.secondary,
+    fontSize: FontSizes.xs,
+    fontWeight: FontWeights.medium,
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -469,5 +577,32 @@ const styles = StyleSheet.create({
     color: Colors.text.muted,
     fontSize: FontSizes.xs,
     marginHorizontal: 4,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuSheet: {
+    backgroundColor: Colors.card,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.sm,
+    minWidth: 200,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
+  },
+  menuItemText: {
+    fontSize: FontSizes.md,
+    color: Colors.text.secondary,
+    fontWeight: FontWeights.medium,
   },
 });
