@@ -53,6 +53,7 @@ export async function publishVideo(userId: string, payload: UploadPayload): Prom
       language: payload.language || null,
       tags: payload.tags || null,
       aspect_ratio: payload.aspect_ratio || '16:9',
+      is_short: (payload.duration > 0 && payload.duration <= 60) || payload.aspect_ratio === '9:16',
       resolution: payload.resolution || null,
       uploader_id: userId,
       status: 'published',

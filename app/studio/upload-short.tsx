@@ -35,6 +35,7 @@ import {
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { supabase } from '@/lib/supabase';
+import { uploadWithProgress, getVideoMime, getImageMime } from '@/lib/storage';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { useToast } from '@/components/Toast';
@@ -265,7 +266,6 @@ export default function StudioUploadShortScreen() {
     if (!videoFile) newErrors.video = 'Video file is required';
     if (!duration || parseInt(duration) === 0) newErrors.duration = 'Duration is required';
     if (parseInt(duration) > MAX_DURATION_SECONDS) newErrors.duration = `Shorts must be ${MAX_DURATION_SECONDS}s or less`;
-    if (!thumbnailFile) newErrors.thumbnail = 'Thumbnail is required';
     setErrors(newErrors);
     if (Object.keys(newErrors).length > 0) {
       toast.error('Validation failed', Object.values(newErrors)[0]);
@@ -357,6 +357,7 @@ export default function StudioUploadShortScreen() {
           tags: tagsArray.length > 0 ? tagsArray : null,
           resolution: videoMeta?.resolution || null,
           aspect_ratio: '9:16',
+          is_short: true,
           status: visibility,
           views_count: 0,
           like_count: 0,

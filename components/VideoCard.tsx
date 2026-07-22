@@ -10,7 +10,7 @@ import Animated, {
   ZoomIn,
   FadeOut,
 } from 'react-native-reanimated';
-import { Play, Eye, Clock, Film, Calendar, Heart } from 'lucide-react-native';
+import { Play, Eye, Clock, Film, Calendar, Heart, Lock, Crown } from 'lucide-react-native';
 import { Colors, BorderRadius, FontSizes, FontWeights, Spacing } from '@/constants/theme';
 import { Video } from '@/lib/supabase';
 import { CachedImage } from '@/components/CachedImage';
@@ -183,7 +183,18 @@ function VideoCardComponent({
             <Text style={styles.durationText}>{duration}</Text>
           </Animated.View>
 
-          {/* Featured / Trending badges */}
+          {/* Premium / Member-only badges */}
+          {video.is_premium && (
+            <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.premiumBadge}>
+              <Crown size={10} color="#FFD700" />
+              <Text style={styles.premiumText}>Premium</Text>
+            </Animated.View>
+          )}
+          {video.is_member_only && !video.is_premium && (
+            <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.memberOnlyBadge}>
+              <Lock size={10} color="#06B6D4" />
+            </Animated.View>
+          )}
           {video.featured && (
             <Animated.View entering={FadeIn.delay(100).duration(200)} style={styles.featuredBadge}>
               <Text style={styles.featuredText}>Featured</Text>
@@ -379,6 +390,36 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
     fontSize: FontSizes.xs,
     fontWeight: FontWeights.bold,
+  },
+  premiumBadge: {
+    position: 'absolute',
+    top: Spacing.xs,
+    right: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(255, 215, 0, 0.95)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: BorderRadius.sm,
+    zIndex: 2,
+  },
+  premiumText: {
+    color: '#000',
+    fontSize: 10,
+    fontWeight: FontWeights.bold,
+  },
+  memberOnlyBadge: {
+    position: 'absolute',
+    top: Spacing.xs,
+    right: 40,
+    width: 22,
+    height: 22,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: 'rgba(6, 182, 212, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
   },
   progressContainer: {
     position: 'absolute',

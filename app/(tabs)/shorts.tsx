@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,15 +12,11 @@ import {
   Platform,
   Share,
   TextInput,
+  ListRenderItem,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  interpolate,
-  Extrapolate,
   FadeIn,
 } from 'react-native-reanimated';
 import {
@@ -56,6 +52,9 @@ import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constan
 const { width, height } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
 
+// Module-level constant — FlatList requires viewabilityConfig to be stable
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 60 };
+
 interface ShortItem extends Video {
   uploaderProfile?: Profile;
   isLiked?: boolean;
@@ -73,6 +72,7 @@ export default function ShortsScreen() {
 
   const [shorts, setShorts] = useState<ShortItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -88,50 +88,96 @@ export default function ShortsScreen() {
   const appStateRef = useRef(AppState.currentState);
   const watchedIdsRef = useRef<Set<string>>(new Set());
 
+  // Refs to hold current values for the stable viewability callback
+  const shortsRef = useRef<ShortItem[]>([]);
+  const fetchShortsRef = useRef<(excludeIds?: string[]) => Promise<void>>(async () => {});
+  const userRef = useRef<typeof user>(user);
+
+  // Keep refs in sync
+  shortsRef.current = shorts;
+  userRef.current = user;
+
   // Fetch shorts feed
   const fetchShorts = useCallback(async (excludeIds: string[] = []) => {
     try {
+      setLoadError(false);
       const result = await getShortsFeed(user?.id, 15, excludeIds);
       setFeedReason(result.reason);
+
+      if (!result.videos || result.videos.length === 0) {
+        if (excludeIds.length === 0) {
+          setShorts([]);
+        }
+        return;
+      }
 
       // Enrich with profile, like, save, subscribe data
       const enriched = await Promise.all(
         result.videos.map(async (v) => {
-          const [profileRes, likeRes, favRes, subRes, subCountRes, commentCountRes] = await Promise.all([
-            supabase.from('profiles').select('*').eq('id', v.uploader_id || '').maybeSingle(),
-            user
-              ? supabase.from('video_likes').select('id').eq('video_id', v.id).eq('user_id', user.id).maybeSingle()
-              : Promise.resolve({ data: null }),
-            user
-              ? supabase.from('favorites').select('id').eq('video_id', v.id).eq('user_id', user.id).maybeSingle()
-              : Promise.resolve({ data: null }),
-            user
-              ? isSubscribed(user.id, v.uploader_id || '')
-              : Promise.resolve(false),
-            getSubscriberCount(v.uploader_id || ''),
-            supabase.from('comments').select('id', { count: 'exact', head: true }).eq('video_id', v.id),
-          ]);
+          try {
+            const [profileRes, likeRes, favRes, subRes, subCountRes, commentCountRes] = await Promise.all([
+              supabase.from('profiles').select('*').eq('id', v.uploader_id || '').maybeSingle(),
+              user
+                ? supabase.from('video_likes').select('id').eq('video_id', v.id).eq('user_id', user.id).maybeSingle()
+                : Promise.resolve({ data: null }),
+              user
+                ? supabase.from('favorites').select('id').eq('video_id', v.id).eq('user_id', user.id).maybeSingle()
+                : Promise.resolve({ data: null }),
+              user
+                ? isSubscribed(user.id, v.uploader_id || '')
+                : Promise.resolve(false),
+              getSubscriberCount(v.uploader_id || ''),
+              supabase.from('comments').select('id', { count: 'exact', head: true }).eq('video_id', v.id),
+            ]);
 
-          return {
-            ...v,
-            uploaderProfile: profileRes.data as Profile,
-            isLiked: !!likeRes.data,
-            isSaved: !!favRes.data,
-            isSubscribed: subRes as boolean,
-            subscriberCount: subCountRes as number,
-            likeCount: v.like_count || 0,
-            commentCount: commentCountRes.count || 0,
-          } as ShortItem;
+            return {
+              ...v,
+              uploaderProfile: profileRes.data as Profile | undefined,
+              isLiked: !!likeRes.data,
+              isSaved: !!favRes.data,
+              isSubscribed: subRes as boolean,
+              subscriberCount: subCountRes as number,
+              likeCount: v.like_count || 0,
+              commentCount: commentCountRes.count || 0,
+            } as ShortItem;
+          } catch {
+            return {
+              ...v,
+              uploaderProfile: undefined,
+              isLiked: false,
+              isSaved: false,
+              isSubscribed: false,
+              subscriberCount: 0,
+              likeCount: v.like_count || 0,
+              commentCount: 0,
+            } as ShortItem;
+          }
         })
       );
 
       setShorts((prev) => [...prev, ...enriched]);
     } catch (error) {
       console.error('Error fetching shorts:', error);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
   }, [user?.id]);
+
+  // Keep fetchShortsRef in sync for the stable viewability callback
+  fetchShortsRef.current = fetchShorts;
+
+  // Pause all videos and release resources when leaving the Shorts screen
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        videoRefs.current.forEach((videoEl) => {
+          if (videoEl && videoEl.pause) videoEl.pause();
+        });
+        setIsPlaying(false);
+      };
+    }, [])
+  );
 
   // Initial load
   useEffect(() => {
@@ -145,7 +191,6 @@ export default function ShortsScreen() {
         appStateRef.current = nextState;
       } else if (nextState === 'inactive' || nextState === 'background') {
         appStateRef.current = nextState;
-        // Pause all videos
         videoRefs.current.forEach((videoEl) => {
           if (videoEl && videoEl.pause) videoEl.pause();
         });
@@ -155,53 +200,65 @@ export default function ShortsScreen() {
     return () => subscription.remove();
   }, []);
 
-  // Viewability config for detecting active short
-  const viewabilityConfig = { itemVisiblePercentThreshold: 60 };
-  const onViewableItemsChanged = useCallback(
+  // STABLE onViewableItemsChanged — stored in useRef so its identity never changes.
+  // This prevents the "Changing onViewableItemsChanged on the fly is not supported" error.
+  const onViewableItemsChangedRef = useRef(
     ({ viewableItems }: { viewableItems: ViewToken[] }) => {
-      if (viewableItems.length > 0 && viewableItems[0].index !== null) {
-        const newIndex = viewableItems[0].index;
-        setActiveIndex(newIndex);
+      if (viewableItems.length === 0) return;
+      const token = viewableItems[0];
+      if (token.index === null) return;
 
-        // Track watched
-        const watched = viewableItems[0].item as Video;
-        if (watched && watched.id) {
-          watchedIdsRef.current.add(watched.id);
-          // Record view
-          if (user) {
-            supabase.from('video_views').insert({
-              video_id: watched.id,
-              user_id: user.id,
-              watch_duration: 0,
-            }).then();
-          }
-        }
+      const newIndex = token.index;
+      setActiveIndex(newIndex);
 
-        // Pause all videos except active
-        videoRefs.current.forEach((videoEl, videoId) => {
-          if (videoId !== watched.id) {
-            if (videoEl && videoEl.pause) videoEl.pause();
-          }
-        });
+      const watched = token.item as Video | undefined;
+      if (!watched || !watched.id) return;
 
-        // Play active video
-        const activeVideo = videoRefs.current.get(watched.id);
-        if (activeVideo && activeVideo.play) {
-          activeVideo.play().catch(() => {});
-          setIsPlaying(true);
-        }
+      watchedIdsRef.current.add(watched.id);
 
-        // Load more when near end
-        if (newIndex >= shorts.length - 3) {
-          fetchShorts(shorts.map((s) => s.id));
-        }
+      // Record view
+      const currentUser = userRef.current;
+      if (currentUser) {
+        supabase.from('video_views').insert({
+          video_id: watched.id,
+          user_id: currentUser.id,
+          watch_duration: 0,
+        }).then(() => {}, () => {});
       }
+
+      // Pause all videos except active
+      videoRefs.current.forEach((videoEl, videoId) => {
+        if (videoId !== watched.id) {
+          if (videoEl && videoEl.pause) videoEl.pause();
+        }
+      });
+
+      // Play active video
+      const activeVideo = videoRefs.current.get(watched.id);
+      if (activeVideo && activeVideo.play) {
+        activeVideo.play().catch(() => {});
+        setIsPlaying(true);
+      }
+
+      // Load more when near end — use ref to avoid callback dependency on shorts
+      const currentShorts = shortsRef.current;
+      if (newIndex >= currentShorts.length - 3) {
+        const excludeIds = currentShorts.map((s) => s.id);
+        fetchShortsRef.current(excludeIds);
+      }
+    }
+  );
+
+  // Stable callback wrapper — identity never changes, delegates to ref
+  const handleViewableItemsChanged = useCallback(
+    (info: { viewableItems: ViewToken[] }) => {
+      onViewableItemsChangedRef.current(info);
     },
-    [shorts, user, fetchShorts]
+    []
   );
 
   // Toggle like
-  const toggleLike = async (short: ShortItem, index: number) => {
+  const toggleLike = useCallback(async (short: ShortItem, index: number) => {
     if (!user) {
       toast.info('Sign in required', 'Please sign in to like shorts');
       return;
@@ -226,8 +283,7 @@ export default function ShortsScreen() {
       } else {
         await supabase.from('video_likes').delete().eq('video_id', short.id).eq('user_id', user.id);
       }
-    } catch (error) {
-      // Revert on error
+    } catch {
       setShorts((prev) =>
         prev.map((s, i) =>
           i === index
@@ -236,19 +292,17 @@ export default function ShortsScreen() {
         )
       );
     }
-  };
+  }, [user, toast]);
 
   // Toggle save
-  const toggleSave = async (short: ShortItem, index: number) => {
+  const toggleSave = useCallback(async (short: ShortItem, index: number) => {
     if (!user) {
       toast.info('Sign in required', 'Please sign in to save shorts');
       return;
     }
 
     const newSaved = !short.isSaved;
-    setShorts((prev) =>
-      prev.map((s, i) => (i === index ? { ...s, isSaved: newSaved } : s))
-    );
+    setShorts((prev) => prev.map((s, i) => (i === index ? { ...s, isSaved: newSaved } : s)));
 
     try {
       if (newSaved) {
@@ -258,15 +312,13 @@ export default function ShortsScreen() {
         await supabase.from('favorites').delete().eq('video_id', short.id).eq('user_id', user.id);
         toast.info('Removed from Watch Later');
       }
-    } catch (error) {
-      setShorts((prev) =>
-        prev.map((s, i) => (i === index ? { ...s, isSaved: !newSaved } : s))
-      );
+    } catch {
+      setShorts((prev) => prev.map((s, i) => (i === index ? { ...s, isSaved: !newSaved } : s)));
     }
-  };
+  }, [user, toast]);
 
   // Toggle subscribe
-  const toggleSubscribe = async (short: ShortItem, index: number) => {
+  const toggleSubscribe = useCallback(async (short: ShortItem, index: number) => {
     if (!user) {
       toast.info('Sign in required', 'Please sign in to subscribe');
       return;
@@ -294,7 +346,7 @@ export default function ShortsScreen() {
         await unsubscribeFromChannel(user.id, channelId);
         toast.info('Unsubscribed');
       }
-    } catch (error) {
+    } catch {
       setShorts((prev) =>
         prev.map((s, i) =>
           i === index
@@ -303,10 +355,10 @@ export default function ShortsScreen() {
         )
       );
     }
-  };
+  }, [user, toast]);
 
   // Share
-  const handleShare = async (short: ShortItem) => {
+  const handleShare = useCallback(async (short: ShortItem) => {
     const shareUrl = `${window.location.origin}/player/${short.id}`;
     const shareText = `Check out "${short.title}" on StreamWorld`;
 
@@ -317,7 +369,6 @@ export default function ShortsScreen() {
       } catch { /* user cancelled */ }
     }
 
-    // Fallback: show share options via toast
     if (isWeb && navigator.clipboard) {
       await navigator.clipboard.writeText(shareUrl);
       toast.success('Link copied', 'Share URL copied to clipboard');
@@ -326,10 +377,10 @@ export default function ShortsScreen() {
         await Share.share({ message: `${shareText} - ${shareUrl}`, url: shareUrl });
       } catch { /* cancelled */ }
     }
-  };
+  }, [toast]);
 
   // Toggle play/pause
-  const togglePlayPause = (shortId: string) => {
+  const togglePlayPause = useCallback((shortId: string) => {
     const videoEl = videoRefs.current.get(shortId);
     if (!videoEl) return;
     if (isPlaying) {
@@ -339,10 +390,10 @@ export default function ShortsScreen() {
       videoEl.play?.().catch(() => {});
       setIsPlaying(true);
     }
-  };
+  }, [isPlaying]);
 
   // Toggle mute
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     setMuted((prev) => {
       const newMuted = !prev;
       videoRefs.current.forEach((videoEl) => {
@@ -350,7 +401,7 @@ export default function ShortsScreen() {
       });
       return newMuted;
     });
-  };
+  }, []);
 
   // Search shorts
   const handleSearch = useCallback(async (query: string) => {
@@ -367,10 +418,10 @@ export default function ShortsScreen() {
         .or(`title.ilike.%${query}%,tags.cs.{${query}}`)
         .limit(20);
       if (data) {
-        const shorts = (data as Video[]).filter(
+        const shortsResults = (data as Video[]).filter(
           (v) => v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60)
         );
-        setSearchResults(shorts);
+        setSearchResults(shortsResults);
       }
     } catch (error) {
       console.error('Search error:', error);
@@ -379,14 +430,14 @@ export default function ShortsScreen() {
     }
   }, []);
 
-  // Format
-  const formatCount = (n: number): string => {
+  // Format helpers — module-level pure functions, no re-creation
+  const formatCount = useCallback((n: number): string => {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
     if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
     return `${n}`;
-  };
+  }, []);
 
-  const formatTimeAgo = (dateString: string): string => {
+  const formatTimeAgo = useCallback((dateString: string): string => {
     const diff = Date.now() - new Date(dateString).getTime();
     const mins = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
@@ -397,201 +448,238 @@ export default function ShortsScreen() {
     if (days < 7) return `${days}d ago`;
     if (days < 30) return `${Math.floor(days / 7)}w ago`;
     return new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
+  }, []);
 
-  // Render a single short
-  const renderShort = ({ item, index }: { item: ShortItem; index: number }) => {
-    const isActive = index === activeIndex;
-    const creatorName = item.uploaderProfile?.full_name || item.uploaderProfile?.email?.split('@')[0] || 'Creator';
-    const creatorAvatar = item.uploaderProfile?.avatar_url;
+  // Retry handler — re-fetches without navigating anywhere
+  const handleRetry = useCallback(() => {
+    setLoading(true);
+    setLoadError(false);
+    setShorts([]);
+    setActiveIndex(0);
+    videoRefs.current.clear();
+    watchedIdsRef.current.clear();
+    fetchShorts();
+  }, [fetchShorts]);
 
-    return (
-      <View style={styles.shortContainer}>
-        {/* Video Background */}
-        <View style={styles.videoWrapper}>
-          {isWeb && item.video_url ? (
-            <video
-              ref={(el) => {
-                if (el) {
-                  videoRefs.current.set(item.id, el);
-                  el.muted = muted;
-                  if (isActive && isPlaying) {
-                    el.play().catch(() => {});
+  // Memoized render — only re-renders when item or activeIndex changes
+  const renderShort = useCallback<ListRenderItem<ShortItem>>(
+    ({ item, index }) => {
+      const isActive = index === activeIndex;
+      const creatorName = item.uploaderProfile?.full_name || item.uploaderProfile?.email?.split('@')[0] || 'Creator';
+      const creatorAvatar = item.uploaderProfile?.avatar_url;
+      const hasVideo = !!(item.video_url && item.video_url.trim());
+
+      return (
+        <View style={styles.shortContainer}>
+          {/* Video Background */}
+          <View style={styles.videoWrapper}>
+            {isWeb && hasVideo ? (
+              <video
+                ref={(el) => {
+                  if (el) {
+                    videoRefs.current.set(item.id, el);
+                    el.muted = muted;
+                    if (isActive && isPlaying) {
+                      el.play().catch(() => {});
+                    }
                   }
-                }
-              }}
-              src={item.video_url}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'contain',
-                backgroundColor: '#000',
-              }}
-              playsInline
-              loop
-              muted={muted}
-              onClick={() => togglePlayPause(item.id)}
-            />
-          ) : (
-            <View style={styles.videoPlaceholder}>
-              {item.thumbnail_url ? (
-                <Image source={{ uri: item.thumbnail_url }} style={styles.thumbnailBg} resizeMode="cover" />
-              ) : null}
-              <View style={styles.playOverlay}>
-                <TouchableOpacity onPress={() => togglePlayPause(item.id)}>
-                  {isPlaying ? <Pause size={48} color={Colors.text.primary} /> : <Play size={48} color={Colors.text.primary} />}
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
-          {/* Gradient Overlay */}
-          <View style={styles.bottomGradient} />
-          <View style={styles.topGradient} />
-        </View>
-
-        {/* Right Side Controls */}
-        <View style={styles.rightControls}>
-          {/* Like */}
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPress={() => toggleLike(item, index)}
-            activeOpacity={0.7}
-          >
-            <Animated.View style={styles.controlIcon}>
-              <Heart
-                size={30}
-                color={item.isLiked ? Colors.primary : Colors.text.primary}
-                fill={item.isLiked ? Colors.primary : 'transparent'}
+                }}
+                src={item.video_url}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  backgroundColor: '#000',
+                }}
+                playsInline
+                loop
+                muted={muted}
+                onClick={() => togglePlayPause(item.id)}
               />
-            </Animated.View>
-            <Text style={styles.controlLabel}>{formatCount(item.likeCount || 0)}</Text>
-          </TouchableOpacity>
-
-          {/* Comments */}
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPress={() => setShowComments(true)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.controlIcon}>
-              <MessageCircle size={30} color={Colors.text.primary} />
-            </View>
-            <Text style={styles.controlLabel}>{formatCount(item.commentCount || 0)}</Text>
-          </TouchableOpacity>
-
-          {/* Share */}
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPress={() => handleShare(item)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.controlIcon}>
-              <Share2 size={30} color={Colors.text.primary} />
-            </View>
-            <Text style={styles.controlLabel}>Share</Text>
-          </TouchableOpacity>
-
-          {/* Save */}
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPress={() => toggleSave(item, index)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.controlIcon}>
-              <Bookmark
-                size={30}
-                color={item.isSaved ? Colors.primary : Colors.text.primary}
-                fill={item.isSaved ? Colors.primary : 'transparent'}
-              />
-            </View>
-            <Text style={styles.controlLabel}>{item.isSaved ? 'Saved' : 'Save'}</Text>
-          </TouchableOpacity>
-
-          {/* Creator Profile */}
-          <TouchableOpacity
-            style={styles.creatorButton}
-            onPress={() => router.push(`/channel`)}
-            activeOpacity={0.7}
-          >
-            {creatorAvatar ? (
-              <Image source={{ uri: creatorAvatar }} style={styles.creatorAvatar} />
             ) : (
-              <View style={styles.creatorAvatarPlaceholder}>
-                <Text style={styles.creatorAvatarText}>{creatorName.charAt(0).toUpperCase()}</Text>
+              <View style={styles.videoPlaceholder}>
+                {item.thumbnail_url ? (
+                  <Image
+                    source={{ uri: item.thumbnail_url }}
+                    style={styles.thumbnailBg}
+                    resizeMode="cover"
+                    onError={() => {}}
+                  />
+                ) : null}
+                <View style={styles.playOverlay}>
+                  <TouchableOpacity onPress={() => togglePlayPause(item.id)}>
+                    {isPlaying ? <Pause size={48} color={Colors.text.primary} /> : <Play size={48} color={Colors.text.primary} />}
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
-          </TouchableOpacity>
 
-          {/* Subscribe */}
-          {user && item.uploader_id !== user.id && (
+            {/* Gradient Overlay */}
+            <View style={styles.bottomGradient} />
+            <View style={styles.topGradient} />
+          </View>
+
+          {/* Right Side Controls */}
+          <View style={styles.rightControls}>
+            {/* Like */}
             <TouchableOpacity
-              style={[styles.subscribeButton, item.isSubscribed && styles.subscribeButtonActive]}
-              onPress={() => toggleSubscribe(item, index)}
+              style={styles.controlButton}
+              onPress={() => toggleLike(item, index)}
               activeOpacity={0.7}
             >
-              {item.isSubscribed ? (
-                <UserCheck size={16} color={Colors.text.primary} />
+              <View style={styles.controlIcon}>
+                <Heart
+                  size={30}
+                  color={item.isLiked ? Colors.primary : Colors.text.primary}
+                  fill={item.isLiked ? Colors.primary : 'transparent'}
+                />
+              </View>
+              <Text style={styles.controlLabel}>{formatCount(item.likeCount || 0)}</Text>
+            </TouchableOpacity>
+
+            {/* Comments */}
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={() => setShowComments(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.controlIcon}>
+                <MessageCircle size={30} color={Colors.text.primary} />
+              </View>
+              <Text style={styles.controlLabel}>{formatCount(item.commentCount || 0)}</Text>
+            </TouchableOpacity>
+
+            {/* Share */}
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={() => handleShare(item)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.controlIcon}>
+                <Share2 size={30} color={Colors.text.primary} />
+              </View>
+              <Text style={styles.controlLabel}>Share</Text>
+            </TouchableOpacity>
+
+            {/* Save */}
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={() => toggleSave(item, index)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.controlIcon}>
+                <Bookmark
+                  size={30}
+                  color={item.isSaved ? Colors.primary : Colors.text.primary}
+                  fill={item.isSaved ? Colors.primary : 'transparent'}
+                />
+              </View>
+              <Text style={styles.controlLabel}>{item.isSaved ? 'Saved' : 'Save'}</Text>
+            </TouchableOpacity>
+
+            {/* Creator Profile */}
+            <TouchableOpacity
+              style={styles.creatorButton}
+              onPress={() => router.push('/channel')}
+              activeOpacity={0.7}
+            >
+              {creatorAvatar ? (
+                <Image source={{ uri: creatorAvatar }} style={styles.creatorAvatar} />
               ) : (
-                <UserPlus size={16} color={Colors.text.primary} />
+                <View style={styles.creatorAvatarPlaceholder}>
+                  <Text style={styles.creatorAvatarText}>{creatorName.charAt(0).toUpperCase()}</Text>
+                </View>
               )}
             </TouchableOpacity>
+
+            {/* Subscribe */}
+            {user && item.uploader_id !== user.id && (
+              <TouchableOpacity
+                style={[styles.subscribeButton, item.isSubscribed && styles.subscribeButtonActive]}
+                onPress={() => toggleSubscribe(item, index)}
+                activeOpacity={0.7}
+              >
+                {item.isSubscribed ? (
+                  <UserCheck size={16} color={Colors.text.primary} />
+                ) : (
+                  <UserPlus size={16} color={Colors.text.primary} />
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Mute Toggle */}
+          <TouchableOpacity style={styles.muteButton} onPress={toggleMute} activeOpacity={0.7}>
+            {muted ? <VolumeX size={20} color={Colors.text.primary} /> : <Volume2 size={20} color={Colors.text.primary} />}
+          </TouchableOpacity>
+
+          {/* Bottom Info */}
+          <View style={styles.bottomInfo}>
+            {/* Creator Info */}
+            <View style={styles.creatorInfo}>
+              <Text style={styles.creatorName}>@{creatorName}</Text>
+              {item.uploaderProfile?.bio ? (
+                <Text style={styles.creatorBio} numberOfLines={1}>{item.uploaderProfile.bio}</Text>
+              ) : null}
+            </View>
+
+            {/* Title */}
+            <Text style={styles.shortTitle} numberOfLines={2}>{item.title}</Text>
+
+            {/* Description */}
+            {item.description ? (
+              <Text style={styles.shortDescription} numberOfLines={2}>{item.description}</Text>
+            ) : null}
+
+            {/* Music Info Placeholder */}
+            <View style={styles.musicInfo}>
+              <Music size={14} color={Colors.text.primary} />
+              <Text style={styles.musicText} numberOfLines={1}>Original audio - {creatorName}</Text>
+            </View>
+
+            {/* Meta */}
+            <View style={styles.metaRow}>
+              <View style={styles.metaItem}>
+                <Eye size={12} color={Colors.text.muted} />
+                <Text style={styles.metaText}>{formatCount(item.views_count)} views</Text>
+              </View>
+              <Text style={styles.metaDot}>·</Text>
+              <Text style={styles.metaText}>{formatTimeAgo(item.created_at)}</Text>
+            </View>
+          </View>
+
+          {/* Swipe Up Hint */}
+          {index === 0 && activeIndex === 0 && (
+            <Animated.View
+              entering={FadeIn.delay(500).duration(500)}
+              style={styles.swipeHint}
+            >
+              <ChevronUp size={24} color={Colors.text.muted} />
+              <Text style={styles.swipeHintText}>Swipe for more</Text>
+            </Animated.View>
           )}
         </View>
+      );
+    },
+    [activeIndex, isPlaying, muted, user, toggleLike, toggleSave, toggleSubscribe, handleShare, togglePlayPause, toggleMute, formatCount, formatTimeAgo]
+  );
 
-        {/* Mute Toggle */}
-        <TouchableOpacity style={styles.muteButton} onPress={toggleMute} activeOpacity={0.7}>
-          {muted ? <VolumeX size={20} color={Colors.text.primary} /> : <Volume2 size={20} color={Colors.text.primary} />}
-        </TouchableOpacity>
+  // Stable keyExtractor
+  const keyExtractor = useCallback((item: ShortItem) => item.id, []);
 
-        {/* Bottom Info */}
-        <View style={styles.bottomInfo}>
-          {/* Creator Info */}
-          <View style={styles.creatorInfo}>
-            <Text style={styles.creatorName}>@{creatorName}</Text>
-            {item.uploaderProfile?.bio ? (
-              <Text style={styles.creatorBio} numberOfLines={1}>{item.uploaderProfile.bio}</Text>
-            ) : null}
-          </View>
+  // Stable getItemLayout for performance — each item is full screen height
+  const getItemLayout = useCallback(
+    (_: any, index: number) => ({ length: height, offset: height * index, index }),
+    []
+  );
 
-          {/* Title */}
-          <Text style={styles.shortTitle} numberOfLines={2}>{item.title}</Text>
-
-          {/* Description */}
-          {item.description ? (
-            <Text style={styles.shortDescription} numberOfLines={2}>{item.description}</Text>
-          ) : null}
-
-          {/* Music Info Placeholder */}
-          <View style={styles.musicInfo}>
-            <Music size={14} color={Colors.text.primary} />
-            <Text style={styles.musicText} numberOfLines={1}>Original audio - {creatorName}</Text>
-          </View>
-
-          {/* Meta */}
-          <View style={styles.metaRow}>
-            <View style={styles.metaItem}>
-              <Eye size={12} color={Colors.text.muted} />
-              <Text style={styles.metaText}>{formatCount(item.views_count)} views</Text>
-            </View>
-            <Text style={styles.metaDot}>·</Text>
-            <Text style={styles.metaText}>{formatTimeAgo(item.created_at)}</Text>
-          </View>
-        </View>
-
-        {/* Swipe Up Hint */}
-        {index === 0 && activeIndex === 0 && (
-          <Animated.View
-            entering={FadeIn.delay(500).duration(500)}
-            style={styles.swipeHint}
-          >
-            <ChevronUp size={24} color={Colors.text.muted} />
-            <Text style={styles.swipeHintText}>Swipe for more</Text>
-          </Animated.View>
-        )}
-      </View>
-    );
-  };
+  // Stable onEndReached
+  const onEndReached = useCallback(() => {
+    const currentShorts = shortsRef.current;
+    if (currentShorts.length > 0) {
+      fetchShortsRef.current(currentShorts.map((s) => s.id));
+    }
+  }, []);
 
   // Loading state
   if (loading && shorts.length === 0) {
@@ -607,8 +695,23 @@ export default function ShortsScreen() {
     );
   }
 
+  // Error state — Retry button re-fetches, never navigates
+  if (loadError && shorts.length === 0) {
+    return (
+      <View style={styles.errorContainer}>
+        <View style={styles.errorCard}>
+          <Text style={styles.errorTitle}>Unable to load Shorts</Text>
+          <Text style={styles.errorText}>Something went wrong while loading the Shorts feed.</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleRetry} activeOpacity={0.8}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   // Empty state
-  if (!loading && shorts.length === 0) {
+  if (!loading && !loadError && shorts.length === 0) {
     return (
       <View style={styles.emptyContainer}>
         <Play size={64} color={Colors.text.muted} />
@@ -621,6 +724,8 @@ export default function ShortsScreen() {
       </View>
     );
   }
+
+  const activeShort = shorts[activeIndex];
 
   return (
     <View style={styles.container}>
@@ -685,34 +790,37 @@ export default function ShortsScreen() {
         </View>
       )}
 
-      {/* Shorts Feed */}
+      {/* Shorts Feed — all props are stable references */}
       <FlatList
         ref={flatListRef}
         data={shorts}
-        keyExtractor={(item) => item.id}
+        keyExtractor={keyExtractor}
         renderItem={renderShort}
         pagingEnabled
         showsVerticalScrollIndicator={false}
         snapToInterval={height}
         snapToAlignment="start"
         decelerationRate="fast"
-        viewabilityConfig={viewabilityConfig}
-        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={VIEWABILITY_CONFIG}
+        onViewableItemsChanged={handleViewableItemsChanged}
         onEndReachedThreshold={0.5}
-        onEndReached={() => {
-          if (shorts.length > 0) {
-            fetchShorts(shorts.map((s) => s.id));
-          }
-        }}
+        onEndReached={onEndReached}
+        getItemLayout={getItemLayout}
+        initialNumToRender={3}
+        maxToRenderPerBatch={2}
+        windowSize={5}
+        removeClippedSubviews
         contentContainerStyle={styles.feed}
       />
 
-      {/* Comments Panel */}
-      <CommentsPanel
-        videoId={shorts[activeIndex]?.id || ''}
-        visible={showComments}
-        onClose={() => setShowComments(false)}
-      />
+      {/* Comments Panel — guard against undefined active short */}
+      {activeShort && (
+        <CommentsPanel
+          videoId={activeShort.id}
+          visible={showComments}
+          onClose={() => setShowComments(false)}
+        />
+      )}
     </View>
   );
 }
@@ -843,6 +951,12 @@ const styles = StyleSheet.create({
   loadingCard: { alignItems: 'center', gap: Spacing.md },
   loadingIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(229, 9, 20, 0.1)', justifyContent: 'center', alignItems: 'center' },
   loadingText: { fontSize: FontSizes.md, color: Colors.text.secondary },
+  errorContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', padding: Spacing.xxl },
+  errorCard: { alignItems: 'center', gap: Spacing.md, maxWidth: 320 },
+  errorTitle: { fontSize: FontSizes.xl, fontWeight: FontWeights.bold, color: Colors.text.primary },
+  errorText: { fontSize: FontSizes.md, color: Colors.text.muted, textAlign: 'center', lineHeight: 22 },
+  retryButton: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.primary, paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, borderRadius: BorderRadius.lg, marginTop: Spacing.sm },
+  retryButtonText: { fontSize: FontSizes.md, color: Colors.text.primary, fontWeight: FontWeights.semibold },
   emptyContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', padding: Spacing.xxl, gap: Spacing.md },
   emptyTitle: { fontSize: FontSizes.xl, fontWeight: FontWeights.bold, color: Colors.text.primary },
   emptyText: { fontSize: FontSizes.md, color: Colors.text.muted, textAlign: 'center', lineHeight: 22 },

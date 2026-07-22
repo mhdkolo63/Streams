@@ -221,6 +221,7 @@ export default function AdminDashboard() {
     { icon: Users, label: 'Manage Users', route: '/admin/users', color: Colors.status.warning },
     { icon: BarChart3, label: 'Analytics', route: '/admin/analytics', color: Colors.status.error },
     { icon: Activity, label: 'View Reports', route: '/admin/analytics', color: Colors.status.success },
+    { icon: Shield, label: 'Platform Controls', route: '/admin/controls', color: '#8B5CF6' },
     { icon: Settings, label: 'System Settings', route: '/admin/settings', color: Colors.text.secondary },
   ];
 

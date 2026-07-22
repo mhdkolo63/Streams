@@ -5,22 +5,37 @@
 import { supabase, Video } from '@/lib/supabase';
 
 export function isShort(video: Video): boolean {
-  return video.aspect_ratio === '9:16' || (video.duration > 0 && video.duration <= 60);
+  return video.is_short === true || video.aspect_ratio === '9:16' || (video.duration > 0 && video.duration <= 60);
 }
 
 export async function getShorts(limit = 20, excludeIds: string[] = []): Promise<Video[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('videos')
     .select('*')
     .eq('status', 'published')
+    .eq('is_short', true)
     .order('views_count', { ascending: false })
     .limit(limit * 3);
 
-  if (error || !data) return [];
+  if (excludeIds.length > 0) {
+    query = query.not('id', 'in', `(${excludeIds.join(',')})`);
+  }
 
-  const all = data as Video[];
-  const shorts = all.filter((v) => isShort(v) && !excludeIds.includes(v.id));
-  return shorts.slice(0, limit);
+  const { data, error } = await query;
+  if (error || !data) {
+    // Fallback to client-side filter if is_short column not available
+    const { data: fallback } = await supabase
+      .from('videos')
+      .select('*')
+      .eq('status', 'published')
+      .order('views_count', { ascending: false })
+      .limit(limit * 3);
+    if (!fallback) return [];
+    const shorts = (fallback as Video[]).filter((v) => isShort(v) && !excludeIds.includes(v.id));
+    return shorts.slice(0, limit);
+  }
+
+  return (data as Video[]).slice(0, limit);
 }
 
 export async function getShortsByCreator(userId: string, limit = 20): Promise<Video[]> {

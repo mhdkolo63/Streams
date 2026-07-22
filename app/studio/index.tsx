@@ -24,6 +24,8 @@ import {
   TrendingUp,
   Plus,
   Zap,
+  Radio,
+  DollarSign,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useAuth } from '@/contexts/AuthContext';
@@ -96,6 +98,8 @@ export default function StudioDashboard() {
   const quickActions = [
     { icon: Upload, label: 'Upload Video', route: '/studio/upload', color: Colors.primary },
     { icon: Play, label: 'Upload Short', route: '/studio/upload-short', color: '#3B82F6' },
+    { icon: Radio, label: 'Go Live', route: '/studio/go-live', color: '#EF4444' },
+    { icon: DollarSign, label: 'Monetization', route: '/studio/monetization', color: '#10B981' },
     { icon: Grid3x3, label: 'My Content', route: '/studio/content', color: '#10B981' },
     { icon: HardDrive, label: 'Storage', route: '/studio/storage', color: '#F59E0B' },
   ];

@@ -103,9 +103,9 @@ export default function SearchScreen() {
     try {
       const [categoriesRes, trendingRes, recentRes, featuredRes] = await Promise.all([
         supabase.from('categories').select('*').order('name'),
-        supabase.from('videos').select('*').eq('status', 'published').eq('trending', true).order('views_count', { ascending: false }).limit(15),
-        supabase.from('videos').select('*').eq('status', 'published').order('created_at', { ascending: false }).limit(10),
-        supabase.from('videos').select('*').eq('status', 'published').eq('featured', true).order('views_count', { ascending: false }).limit(10),
+        supabase.from('videos').select('*').eq('status', 'published').eq('trending', true).eq('is_short', false).order('views_count', { ascending: false }).limit(15),
+        supabase.from('videos').select('*').eq('status', 'published').eq('is_short', false).order('created_at', { ascending: false }).limit(10),
+        supabase.from('videos').select('*').eq('status', 'published').eq('featured', true).eq('is_short', false).order('views_count', { ascending: false }).limit(10),
       ]);
 
       if (categoriesRes.data) setCategories(categoriesRes.data as Category[]);
@@ -270,7 +270,7 @@ export default function SearchScreen() {
           return;
         }
 
-        let dbQuery = supabase.from('videos').select('*').eq('status', 'published');
+        let dbQuery = supabase.from('videos').select('*').eq('status', 'published').eq('is_short', false);
 
         // Text search across multiple fields
         if (searchQuery.trim()) {

@@ -35,9 +35,14 @@ import {
   Smartphone,
   Play,
   Trash2,
+  Calendar,
+  Star,
+  Crown,
 } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { supabase, Category } from '@/lib/supabase';
+import { uploadWithProgress, getVideoMime, getImageMime } from '@/lib/storage';
+import { scheduleVideo } from '@/lib/scheduling';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { useToast } from '@/components/Toast';
@@ -80,6 +85,11 @@ export default function StudioUploadScreen() {
   const [tags, setTags] = useState('');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<Visibility>('published');
+  const [isPremiere, setIsPremiere] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [isPremium, setIsPremium] = useState(false);
+  const [isMemberOnly, setIsMemberOnly] = useState(false);
   const [videoMeta, setVideoMeta] = useState<VideoMeta | null>(null);
 
   const [uploading, setUploading] = useState(false);
@@ -317,7 +327,6 @@ export default function StudioUploadScreen() {
     if (!title.trim()) newErrors.title = 'Title is required';
     if (!videoFile) newErrors.video = 'Video file is required';
     if (!duration || parseInt(duration) === 0) newErrors.duration = 'Duration is required';
-    if (!thumbnailFile) newErrors.thumbnail = 'Thumbnail is required';
     setErrors(newErrors);
     if (Object.keys(newErrors).length > 0) {
       toast.error('Validation failed', Object.values(newErrors)[0]);
@@ -342,68 +351,79 @@ export default function StudioUploadScreen() {
       // Upload video file to user's folder
       if (videoFile) {
         setUploadStage('Uploading video...');
-        setUploadProgress(5);
+        setUploadProgress(2);
 
-        const fileExt = sanitizeFilename(videoFile.name?.split('.').pop() || 'mp4');
+        const rawExt = (videoFile.name?.split('.').pop() || 'mp4').toLowerCase();
+        const fileExt = sanitizeFilename(rawExt);
         const fileName = `${user.id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
         const response = await fetch(videoFile.uri);
         const blob = await response.blob();
+        const contentType = getVideoMime(rawExt);
 
         uploadStartTime.current = Date.now();
 
-        const progressInterval = setInterval(() => {
-          const elapsed = (Date.now() - uploadStartTime.current) / 1000;
-          const estimatedProgress = Math.min(55, 5 + (elapsed / Math.max(1, blob.size / (5 * 1024 * 1024))) * 50);
-          setUploadProgress(prev => Math.min(prev + 1, Math.max(prev, estimatedProgress)));
-          if (estimatedProgress > 5) {
-            const speed = (blob.size * (estimatedProgress - 5) / 50) / elapsed;
-            setUploadSpeed(formatUploadSpeed(speed));
-            if (speed > 0) {
-              const remaining = (blob.size * (1 - (estimatedProgress - 5) / 50)) / speed;
-              setUploadEta(formatEta(remaining));
+        let lastProgress = 0;
+        const result = await uploadWithProgress(
+          'videos',
+          fileName,
+          blob,
+          contentType,
+          (p) => {
+            const mapped = 5 + (p / 100) * 55;
+            if (mapped > lastProgress) {
+              lastProgress = mapped;
+              setUploadProgress(mapped);
+              const elapsed = (Date.now() - uploadStartTime.current) / 1000;
+              if (p > 5 && elapsed > 0) {
+                const speed = (blob.size * (p / 100)) / elapsed;
+                setUploadSpeed(formatUploadSpeed(speed));
+                if (speed > 0) {
+                  const remaining = (blob.size * (1 - p / 100)) / speed;
+                  setUploadEta(formatEta(remaining));
+                }
+              }
             }
-          }
-        }, 500);
+          },
+          false,
+          3
+        );
 
-        const { error: uploadError } = await supabase.storage
-          .from('videos')
-          .upload(fileName, blob, { contentType: `video/${fileExt}`, upsert: false });
-
-        clearInterval(progressInterval);
-
-        if (uploadError) {
-          if (uploadError.message.includes('duplicate') || uploadError.message.includes('already exists')) {
-            throw new Error('A video with this file already exists. Duplicate upload prevented.');
-          }
-          throw new Error(`Video upload failed: ${uploadError.message}`);
-        }
-
+        videoUrl = result.publicUrl;
         setUploadProgress(60);
         setUploadSpeed(''); setUploadEta('');
-        const { data: urlData } = supabase.storage.from('videos').getPublicUrl(fileName);
-        videoUrl = urlData.publicUrl;
       }
 
-      // Upload thumbnail to user's folder
+      // Upload thumbnail to user's folder (optional — auto-generated or user-provided)
       let thumbnailUrl: string | null = null;
       if (thumbnailFile) {
         setUploadStage('Uploading thumbnail...');
         setUploadProgress(65);
 
-        const thumbExt = thumbnailFile.uri?.startsWith('data:image/') ? 'jpg' : sanitizeFilename(thumbnailFile.uri?.split('.').pop() || 'jpg');
+        const isDataUri = thumbnailFile.uri?.startsWith('data:image/');
+        const rawThumbExt = isDataUri
+          ? (thumbnailFile.mimeType?.split('/')[1] || 'jpg')
+          : (thumbnailFile.uri?.split('.').pop() || 'jpg');
+        const thumbExt = sanitizeFilename(rawThumbExt);
         const thumbName = `${user.id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${thumbExt}`;
         const thumbResponse = await fetch(thumbnailFile.uri);
         const thumbBlob = await thumbResponse.blob();
+        const thumbContentType = getImageMime(rawThumbExt);
 
-        const { error: thumbError } = await supabase.storage
-          .from('thumbnails')
-          .upload(thumbName, thumbBlob, { contentType: `image/${thumbExt}` });
-
-        if (!thumbError) {
-          const { data: urlData } = supabase.storage.from('thumbnails').getPublicUrl(thumbName);
-          thumbnailUrl = urlData.publicUrl;
-        } else if (thumbError.message.includes('duplicate')) {
-          throw new Error('Thumbnail upload failed: file already exists.');
+        try {
+          const thumbResult = await uploadWithProgress(
+            'thumbnails',
+            thumbName,
+            thumbBlob,
+            thumbContentType,
+            (p) => setUploadProgress(65 + (p / 100) * 5),
+            false,
+            2
+          );
+          thumbnailUrl = thumbResult.publicUrl;
+        } catch (err: any) {
+          if ((err.message || '').includes('already exists')) {
+            throw new Error('Thumbnail upload failed: file already exists.');
+          }
         }
       }
 
@@ -425,15 +445,26 @@ export default function StudioUploadScreen() {
           tags: tagsArray.length > 0 ? tagsArray : null,
           resolution: videoMeta?.resolution || null,
           aspect_ratio: videoMeta?.aspectRatio || null,
-          status: visibility,
+          is_short: (parseInt(duration) || 0) > 0 && (parseInt(duration) || 0) <= 60,
+          status: (scheduleDate && scheduleTime) ? 'draft' : visibility,
           views_count: 0,
           like_count: 0,
           uploader_id: user.id,
+          is_premium: isPremium,
+          is_member_only: isMemberOnly,
+          premiere_at: isPremiere && scheduleDate && scheduleTime ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null,
+          scheduled_at: scheduleDate && scheduleTime ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null,
         })
         .select()
         .single();
 
       if (insertError) throw new Error(`Failed to save video: ${insertError.message}`);
+
+      // Schedule if date/time provided
+      if (insertedVideo && scheduleDate && scheduleTime) {
+        const scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`).toISOString();
+        await scheduleVideo(insertedVideo.id, user.id, scheduledAt, isPremiere);
+      }
 
       // Link categories
       if (selectedCategories.length > 0 && insertedVideo) {
@@ -455,6 +486,7 @@ export default function StudioUploadScreen() {
         setTitle(''); setDescription(''); setVideoFile(null); setThumbnailFile(null);
         setDuration(''); setGenre(''); setLanguage(''); setTags('');
         setSelectedCategories([]); setVisibility('published'); setVideoMeta(null);
+        setIsPremiere(false); setScheduleDate(''); setScheduleTime(''); setIsPremium(false); setIsMemberOnly(false);
         setUploadProgress(0); setUploadStage(''); setUploading(false);
         setSuccessMessage(null); setUploadSpeed(''); setUploadEta('');
       }, 4000);
@@ -673,6 +705,83 @@ export default function StudioUploadScreen() {
             </View>
           </Animated.View>
 
+          {/* Scheduling & Premiere */}
+          <Animated.View entering={FadeInUp.delay(250).duration(400)} style={styles.section}>
+            <Text style={styles.sectionTitle}>Schedule & Premiere</Text>
+            <View style={styles.scheduleRow}>
+              <TouchableOpacity
+                style={[styles.scheduleOption, (scheduleDate && scheduleTime) && styles.scheduleOptionActive]}
+                onPress={() => {
+                  if (!scheduleDate) setScheduleDate(new Date().toISOString().split('T')[0]);
+                  if (!scheduleTime) setScheduleTime('18:00');
+                }}
+              >
+                <Calendar size={18} color={(scheduleDate && scheduleTime) ? Colors.primary : Colors.text.muted} />
+                <Text style={[styles.scheduleLabel, (scheduleDate && scheduleTime) && styles.scheduleLabelActive]}>Schedule for later</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.scheduleOption, isPremiere && styles.scheduleOptionActive]}
+                onPress={() => setIsPremiere(!isPremiere)}
+              >
+                <Star size={18} color={isPremiere ? Colors.primary : Colors.text.muted} fill={isPremiere ? Colors.primary : 'transparent'} />
+                <Text style={[styles.scheduleLabel, isPremiere && styles.scheduleLabelActive]}>Premiere</Text>
+              </TouchableOpacity>
+            </View>
+            {scheduleDate && (
+              <View style={styles.scheduleInputs}>
+                <View style={styles.halfWidth}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={scheduleDate}
+                    onChangeText={setScheduleDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={Colors.text.muted}
+                  />
+                </View>
+                <View style={styles.halfWidth}>
+                  <Text style={styles.inputLabel}>Time</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={scheduleTime}
+                    onChangeText={setScheduleTime}
+                    placeholder="HH:MM"
+                    placeholderTextColor={Colors.text.muted}
+                  />
+                </View>
+                {(scheduleDate && scheduleTime) && (
+                  <TouchableOpacity onPress={() => { setScheduleDate(''); setScheduleTime(''); }}>
+                    <Text style={styles.clearSchedule}>Clear</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {isPremiere && (
+              <Text style={styles.premiereHint}>Premiere includes a live countdown and chat before the video plays.</Text>
+            )}
+          </Animated.View>
+
+          {/* Access Control */}
+          <Animated.View entering={FadeInUp.delay(280).duration(400)} style={styles.section}>
+            <Text style={styles.sectionTitle}>Access Control</Text>
+            <View style={styles.accessRow}>
+              <TouchableOpacity
+                style={[styles.accessOption, isPremium && styles.accessOptionActive]}
+                onPress={() => setIsPremium(!isPremium)}
+              >
+                <Crown size={18} color={isPremium ? '#FFD700' : Colors.text.muted} />
+                <Text style={[styles.accessLabel, isPremium && styles.accessLabelActive]}>Premium</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.accessOption, isMemberOnly && styles.accessOptionActive]}
+                onPress={() => setIsMemberOnly(!isMemberOnly)}
+              >
+                <Lock size={18} color={isMemberOnly ? Colors.status.info : Colors.text.muted} />
+                <Text style={[styles.accessLabel, isMemberOnly && styles.accessLabelActive]}>Members Only</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+
           <Animated.View entering={FadeInUp.delay(300).duration(400)}>
             <Button
               title={uploading ? uploadStage || 'Uploading...' : 'Upload Video'}
@@ -683,7 +792,7 @@ export default function StudioUploadScreen() {
               icon={<Upload size={18} color={Colors.text.primary} />}
             />
             <Text style={styles.submitHint}>
-              {visibility === 'published' ? 'Video will be public immediately' : visibility === 'unlisted' ? 'Video will only be visible with the link' : 'Video will be private — only you can see it'}
+              {(scheduleDate && scheduleTime) ? 'Video will be scheduled for later' : isPremiere ? 'Premiere will start with a countdown' : visibility === 'published' ? 'Video will be public immediately' : visibility === 'unlisted' ? 'Video will only be visible with the link' : 'Video will be private — only you can see it'}
             </Text>
           </Animated.View>
         </ScrollView>
@@ -742,6 +851,21 @@ const styles = StyleSheet.create({
   radioActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   submitButton: { marginTop: Spacing.lg },
   submitHint: { fontSize: FontSizes.sm, color: Colors.text.muted, textAlign: 'center', marginTop: Spacing.sm },
+  scheduleRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm },
+  scheduleOption: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, padding: Spacing.md, borderRadius: BorderRadius.md, backgroundColor: Colors.card, borderWidth: 2, borderColor: 'transparent' },
+  scheduleOptionActive: { borderColor: Colors.primary, backgroundColor: 'rgba(229, 9, 20, 0.05)' },
+  scheduleLabel: { fontSize: FontSizes.sm, color: Colors.text.muted, fontWeight: FontWeights.medium },
+  scheduleLabelActive: { color: Colors.primary },
+  scheduleInputs: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-end' },
+  inputLabel: { fontSize: FontSizes.xs, color: Colors.text.muted, marginBottom: 4 },
+  input: { backgroundColor: Colors.card, borderRadius: BorderRadius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, color: Colors.text.primary, fontSize: FontSizes.sm, borderWidth: 1, borderColor: Colors.border },
+  clearSchedule: { fontSize: FontSizes.xs, color: Colors.status.error, fontWeight: FontWeights.medium, paddingVertical: Spacing.sm },
+  premiereHint: { fontSize: FontSizes.xs, color: Colors.text.muted, marginTop: Spacing.sm, lineHeight: 16 },
+  accessRow: { flexDirection: 'row', gap: Spacing.sm },
+  accessOption: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, padding: Spacing.md, borderRadius: BorderRadius.md, backgroundColor: Colors.card, borderWidth: 2, borderColor: 'transparent' },
+  accessOptionActive: { borderColor: Colors.primary, backgroundColor: 'rgba(229, 9, 20, 0.05)' },
+  accessLabel: { fontSize: FontSizes.sm, color: Colors.text.muted, fontWeight: FontWeights.medium },
+  accessLabelActive: { color: Colors.primary },
   error: { color: Colors.status.error, fontSize: FontSizes.sm, marginTop: Spacing.xs },
   successBanner: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, backgroundColor: 'rgba(34, 197, 94, 0.1)', borderLeftWidth: 4, borderLeftColor: Colors.status.success, padding: Spacing.md, borderRadius: BorderRadius.md, marginBottom: Spacing.lg },
   successIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(34, 197, 94, 0.15)', justifyContent: 'center', alignItems: 'center' },

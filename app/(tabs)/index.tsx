@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 import {
   Play, Search, Bell, Flame, Star, Clock,
   TrendingUp, Sparkles, Film, Calendar, Plus, Check,
-  Eye, Heart, ThumbsUp, Compass,
+  Eye, Heart, ThumbsUp, Compass, Radio, Download,
 } from 'lucide-react-native';
 import Animated, {
   FadeIn, FadeInDown, FadeInUp, ZoomIn,
@@ -74,8 +74,8 @@ export default function HomeScreen() {
       usedVideoIds.current = new Set();
 
       const [featuredRes, recentRes, categoriesRes] = await Promise.all([
-        supabase.from('videos').select('*').eq('featured', true).eq('status', 'published').order('created_at', { ascending: false }).limit(5),
-        supabase.from('videos').select('*').eq('status', 'published').order('created_at', { ascending: false }).limit(20),
+        supabase.from('videos').select('*').eq('featured', true).eq('status', 'published').eq('is_short', false).order('created_at', { ascending: false }).limit(5),
+        supabase.from('videos').select('*').eq('status', 'published').eq('is_short', false).order('created_at', { ascending: false }).limit(20),
         supabase.from('categories').select('name, slug').order('name'),
       ]);
 
@@ -464,6 +464,14 @@ export default function HomeScreen() {
           <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/shorts')} activeOpacity={0.7}>
             <Film size={22} color={Colors.status.success} />
             <Text style={styles.quickNavText}>Shorts</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/live-feed')} activeOpacity={0.7}>
+            <Radio size={22} color={Colors.primary} fill={Colors.primary} />
+            <Text style={styles.quickNavText}>Live</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickNavBtn} onPress={() => router.push('/downloads')} activeOpacity={0.7}>
+            <Download size={22} color="#8B5CF6" />
+            <Text style={styles.quickNavText}>Downloads</Text>
           </TouchableOpacity>
         </View>
 

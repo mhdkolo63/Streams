@@ -16,6 +16,7 @@ import { ArrowLeft, Camera, Trash2, User, Mail, Phone, AtSign, Check } from 'luc
 import { useAuth } from '@/contexts/AuthContext';
 import { useAuthGuard } from '@/hooks/useGlobalStore';
 import { supabase } from '@/lib/supabase';
+import { uploadWithProgress, getImageMime } from '@/lib/storage';
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { Colors, Spacing, FontSizes, FontWeights, BorderRadius } from '@/constants/theme';
@@ -93,26 +94,28 @@ export default function EditProfileScreen() {
     if (!avatarFile || !user) return null;
 
     try {
-      const fileExt = (avatarFile.uri.split('.').pop() || 'jpg').toLowerCase();
-      const contentType = fileExt === 'png' ? 'image/png' : fileExt === 'webp' ? 'image/webp' : fileExt === 'gif' ? 'image/gif' : 'image/jpeg';
-      const safeExt = sanitizeFilename(fileExt);
-      const fileName = `${user.id}/${user.id}_${Date.now()}.${safeExt}`;
-      const filePath = `${fileName}`;
+      const rawExt = (avatarFile.mimeType?.split('/')[1] || avatarFile.uri?.split('.').pop() || 'jpg').toLowerCase();
+      const safeExt = sanitizeFilename(rawExt);
+      const contentType = getImageMime(rawExt);
+      const filePath = `${user.id}/${user.id}_${Date.now()}.${safeExt}`;
 
       const response = await fetch(avatarFile.uri);
       const blob = await response.blob();
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, blob, { contentType, upsert: true });
+      const result = await uploadWithProgress(
+        'avatars',
+        filePath,
+        blob,
+        contentType,
+        () => {},
+        true,
+        2
+      );
 
-      if (uploadError) throw uploadError;
-
-      const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
-      return urlData.publicUrl;
-    } catch (err) {
+      return result.publicUrl;
+    } catch (err: any) {
       console.error('Error uploading avatar:', err);
-      throw err;
+      throw new Error(err.message || 'Failed to upload profile picture');
     }
   };
 
@@ -192,14 +195,21 @@ export default function EditProfileScreen() {
 
       // Handle avatar changes
       if (avatarFile) {
-        // Upload new avatar
-        const newAvatarUrl = await uploadAvatar();
-        if (newAvatarUrl) {
-          updates.avatar_url = newAvatarUrl;
-          // Clean up old avatar if there was one
-          if (profile?.avatar_url) {
-            await deleteOldAvatar(profile.avatar_url);
+        try {
+          const newAvatarUrl = await uploadAvatar();
+          if (newAvatarUrl) {
+            // Cache-bust the URL so Image component reloads it
+            const cacheBustedUrl = `${newAvatarUrl}?t=${Date.now()}`;
+            updates.avatar_url = cacheBustedUrl;
+            // Clean up old avatar if there was one
+            if (profile?.avatar_url) {
+              await deleteOldAvatar(profile.avatar_url);
+            }
           }
+        } catch (uploadErr: any) {
+          setError(uploadErr.message || 'Failed to upload profile picture');
+          setLoading(false);
+          return;
         }
       } else if (avatarRemoved && profile?.avatar_url) {
         // Avatar was removed

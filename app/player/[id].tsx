@@ -85,6 +85,12 @@ export default function VideoPlayerScreen() {
   const [buffering, setBuffering] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [videoQuality, setVideoQuality] = useState('auto');
+  const [isLooping, setIsLooping] = useState(false);
+  const [sleepTimer, setSleepTimer] = useState<number | null>(null);
+  const [showSleepMenu, setShowSleepMenu] = useState(false);
+  const [sleepRemaining, setSleepRemaining] = useState<number | null>(null);
   const [initialPosition, setInitialPosition] = useState(0);
   const [hasInitialized, setHasInitialized] = useState(false);
   const [relatedVideos, setRelatedVideos] = useState<VideoType[]>([]);
@@ -677,7 +683,7 @@ export default function VideoPlayerScreen() {
               resizeMode={ResizeMode.CONTAIN}
               onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
               shouldPlay={false}
-              isLooping={false}
+              isLooping={isLooping}
               useNativeControls={false}
               volume={volume}
               // Preload only metadata for faster startup

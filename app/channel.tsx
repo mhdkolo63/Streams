@@ -10,7 +10,7 @@ import {
   Dimensions,
   ScrollView,
 } from 'react-native';
-import { useRouter, Stack } from 'expo-router';
+import { useRouter, Stack, useLocalSearchParams } from 'expo-router';
 import {
   ArrowLeft,
   Users,
@@ -40,6 +40,7 @@ export default function MyChannelScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const toast = useToast();
+  const params = useLocalSearchParams<{ creatorId?: string }>();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,7 +54,8 @@ export default function MyChannelScreen() {
   const [activeTab, setActiveTab] = useState<'videos' | 'shorts'>('videos');
 
   const fetchChannelData = useCallback(async () => {
-    if (!user) {
+    const targetUserId = params.creatorId || user?.id;
+    if (!targetUserId) {
       setLoading(false);
       return;
     }
@@ -63,12 +65,12 @@ export default function MyChannelScreen() {
         supabase
           .from('profiles')
           .select('*')
-          .eq('id', user.id)
+          .eq('id', targetUserId)
           .maybeSingle(),
         supabase
           .from('videos')
           .select('*')
-          .eq('uploader_id', user.id)
+          .eq('uploader_id', targetUserId)
           .eq('status', 'published')
           .order('created_at', { ascending: false }),
       ]);
@@ -112,7 +114,7 @@ export default function MyChannelScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user, toast]);
+  }, [user, toast, params.creatorId]);
 
   useEffect(() => {
     fetchChannelData();
@@ -131,8 +133,8 @@ export default function MyChannelScreen() {
   };
 
   const filteredVideos = activeTab === 'shorts'
-    ? videos.filter(v => v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60))
-    : videos.filter(v => !(v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60)));
+    ? videos.filter(v => v.is_short === true || v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60))
+    : videos.filter(v => !(v.is_short === true || v.aspect_ratio === '9:16' || (v.duration > 0 && v.duration <= 60)));
 
   const renderVideo = ({ item, index }: { item: Video; index: number }) => (
     <Animated.View
